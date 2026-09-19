@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import type { Feature, Module, Project, ProjectDetail, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary, SpecificationSummary } from '@forgeflow/contracts';
+import type { AiRun, CreatedAiToken, Feature, Module, Project, ProjectDetail, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary, SpecificationSummary, Task, TaskAuthorization } from '@forgeflow/contracts';
 import { createApp } from '../../app.js';
 
 test('Project and Specification revisions form a persistent, conflict-safe API flow', async (t) => {
@@ -73,6 +73,128 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   assert.deepEqual(features.map((item) => item.id), [userFeature.id, departmentFeature.id]);
   assert.equal((await send({ method: 'GET', url: `${projectPath}/features/${departmentFeature.id}` })).json<Feature>().name, '部门管理');
 
+  const tasksPath = `${projectPath}/features/${departmentFeature.id}/tasks`;
+  const taskInputs = [
+    { code: 'T01', name: '数据基础', type: 'OTHER', status: 'PLANNED', objective: '建立最小数据结构', sortOrder: 1 },
+    { code: 'T02', name: 'Backend', type: 'BACKEND', status: 'PLANNED', objective: '完成服务端接口', sortOrder: 2 },
+    { code: 'T03', name: 'Frontend', type: 'FRONTEND', status: 'PLANNED', objective: '完成工作台交互', sortOrder: 3 },
+    { code: 'T04', name: '集成验证', type: 'INTEGRATION', status: 'PLANNED', objective: '验证前后端闭环', sortOrder: 4 },
+  ] as const;
+  const createdTasks: Task[] = [];
+  for (const input of taskInputs) {
+    const response = await send({ method: 'POST', url: tasksPath, payload: input });
+    assert.equal(response.statusCode, 201);
+    createdTasks.push(response.json<Task>());
+  }
+  assert.equal((await send({ method: 'POST', url: tasksPath, payload: taskInputs[0] })).statusCode, 409);
+  assert.equal((await send({ method: 'POST', url: tasksPath, payload: {
+    ...taskInputs[0], code: 'T05', type: 'TEST',
+  } })).statusCode, 400);
+  assert.equal((await send({ method: 'PATCH', url: `${tasksPath}/${createdTasks[1]!.id}`, payload: {
+    status: 'BLOCKED',
+  } })).statusCode, 400);
+  assert.equal((await send({ method: 'PATCH', url: `${tasksPath}/${createdTasks[0]!.id}`, payload: {
+    status: 'CONFIRMED',
+  } })).statusCode, 409);
+  const confirmedBackend = (await send({ method: 'PATCH', url: `${tasksPath}/${createdTasks[1]!.id}`, payload: {
+    status: 'AUTHORIZED', sortOrder: 0, objective: '服务端接口已准备执行',
+  } })).json<Task>();
+  assert.equal(confirmedBackend.status, 'AUTHORIZED');
+  assert.equal((await send({ method: 'GET', url: `${tasksPath}/${confirmedBackend.id}` })).json<Task>().objective, '服务端接口已准备执行');
+
+  const backendTaskPath = `${tasksPath}/${confirmedBackend.id}`;
+  const authorizationPath = `${backendTaskPath}/authorizations`;
+  const authorizationResponse = await send({ method: 'POST', url: authorizationPath });
+  assert.equal(authorizationResponse.statusCode, 201);
+  const authorization = authorizationResponse.json<TaskAuthorization>();
+  assert.equal(authorization.status, 'ACTIVE');
+  assert.equal((await send({ method: 'POST', url: authorizationPath })).statusCode, 409);
+  assert.equal((await send({ method: 'GET', url: authorizationPath })).json<TaskAuthorization[]>()[0]?.id, authorization.id);
+
+  const tokenResponse = await send({ method: 'POST', url: '/api/ai-tokens', payload: { name: 'workflow-test', scopes: ['spec:write'] } });
+  const aiToken = tokenResponse.json<CreatedAiToken>();
+  const aiApproval = await app.inject({ method: 'POST', url: authorizationPath, headers: { authorization: `Bearer ${aiToken.token}` } });
+  assert.equal(aiApproval.statusCode, 403);
+
+  const runResponse = await send({ method: 'POST', url: `${backendTaskPath}/runs`, payload: {
+    authorizationId: authorization.id, actorName: 'manual-test', baseCommit: '8cba8df',
+  } });
+  assert.equal(runResponse.statusCode, 201);
+  const run = runResponse.json<AiRun>();
+  assert.equal(run.status, 'RUNNING');
+  assert.equal(run.phase, 'PREPARING');
+  assert.equal(run.actorType, 'MANUAL');
+  assert.equal((await send({ method: 'GET', url: backendTaskPath })).json<Task>().status, 'RUNNING');
+  assert.equal((await send({ method: 'POST', url: `${backendTaskPath}/runs`, payload: {
+    authorizationId: authorization.id, actorName: 'manual-test', baseCommit: null,
+  } })).statusCode, 409);
+  assert.equal((await send({ method: 'PATCH', url: `${projectPath}/runs/${run.id}/phase`, payload: { phase: 'IMPLEMENTING' } })).json<AiRun>().phase, 'IMPLEMENTING');
+  assert.equal((await send({ method: 'PATCH', url: `${projectPath}/runs/${run.id}/phase`, payload: { phase: 'TESTING' } })).json<AiRun>().phase, 'TESTING');
+  assert.equal((await send({ method: 'PATCH', url: `${projectPath}/runs/${run.id}/phase`, payload: { phase: 'PREPARING' } })).statusCode, 409);
+  const submittedRun = (await send({ method: 'POST', url: `${projectPath}/runs/${run.id}/submit`, payload: {
+    summary: '完成 Backend 实现', resultCommit: 'abc123', changedFiles: ['src/backend.ts', 'src/backend.test.ts'],
+    verificationSummary: { status: 'PASS', summary: 'typecheck and tests passed' }, issues: [],
+  } })).json<AiRun>();
+  assert.equal(submittedRun.status, 'SUBMITTED');
+  assert.equal(submittedRun.changedFiles.length, 2);
+  assert.equal((await send({ method: 'GET', url: backendTaskPath })).json<Task>().status, 'SUBMITTED');
+  assert.equal((await send({ method: 'GET', url: authorizationPath })).json<TaskAuthorization[]>()[0]?.status, 'CONSUMED');
+  assert.equal((await send({ method: 'POST', url: `${backendTaskPath}/runs`, payload: {
+    authorizationId: authorization.id, actorName: 'manual-test', baseCommit: null,
+  } })).statusCode, 409);
+  const completedBackend = (await send({ method: 'POST', url: `${backendTaskPath}/confirm` })).json<Task>();
+  assert.equal(completedBackend.status, 'CONFIRMED');
+
+  const failureTaskPath = `${tasksPath}/${createdTasks[2]!.id}`;
+  assert.equal((await send({ method: 'PATCH', url: failureTaskPath, payload: { status: 'AUTHORIZED' } })).json<Task>().status, 'AUTHORIZED');
+  const failedAuthorization = (await send({ method: 'POST', url: `${failureTaskPath}/authorizations` })).json<TaskAuthorization>();
+  const failedRun = (await send({ method: 'POST', url: `${failureTaskPath}/runs`, payload: {
+    authorizationId: failedAuthorization.id, actorName: 'manual-test', baseCommit: null,
+  } })).json<AiRun>();
+  const failure = (await send({ method: 'POST', url: `${projectPath}/runs/${failedRun.id}/fail`, payload: {
+    summary: '实现失败', issues: ['build failed'],
+  } })).json<AiRun>();
+  assert.equal(failure.status, 'FAILED');
+  assert.equal((await send({ method: 'GET', url: failureTaskPath })).json<Task>().status, 'AUTHORIZED');
+  const retryAuthorization = (await send({ method: 'POST', url: `${failureTaskPath}/authorizations` })).json<TaskAuthorization>();
+  assert.notEqual(retryAuthorization.id, failedAuthorization.id);
+  const retryRunResponse = await app.inject({ method: 'POST', url: `${failureTaskPath}/runs`, headers: {
+    authorization: `Bearer ${aiToken.token}`,
+  }, payload: {
+    authorizationId: retryAuthorization.id, baseCommit: null,
+  } });
+  assert.equal(retryRunResponse.statusCode, 201);
+  const retryRun = retryRunResponse.json<AiRun>();
+  assert.equal(retryRun.actorType, 'AI_TOKEN');
+  assert.equal(retryRun.actorName, 'workflow-test');
+  assert.equal((await send({ method: 'POST', url: `${projectPath}/runs/${retryRun.id}/abort`, payload: {
+    summary: '人工中断', issues: [],
+  } })).json<AiRun>().status, 'ABORTED');
+  const runHistory = (await send({ method: 'GET', url: `${projectPath}/runs` })).json<AiRun[]>();
+  assert.deepEqual(runHistory.filter((item) => item.taskId === createdTasks[2]!.id).map((item) => item.status), ['ABORTED', 'FAILED']);
+
+  const returnTaskPath = `${tasksPath}/${createdTasks[3]!.id}`;
+  assert.equal((await send({ method: 'PATCH', url: returnTaskPath, payload: { status: 'AUTHORIZED' } })).json<Task>().status, 'AUTHORIZED');
+  const returnAuthorization = (await send({ method: 'POST', url: `${returnTaskPath}/authorizations` })).json<TaskAuthorization>();
+  const returnRun = (await send({ method: 'POST', url: `${returnTaskPath}/runs`, payload: {
+    authorizationId: returnAuthorization.id, actorName: 'manual-test', baseCommit: null,
+  } })).json<AiRun>();
+  assert.equal((await send({ method: 'POST', url: `${projectPath}/runs/${returnRun.id}/submit`, payload: {
+    summary: '等待人工确认', resultCommit: null, changedFiles: [],
+    verificationSummary: { status: 'NOT_RUN', summary: '未执行验证' }, issues: [],
+  } })).statusCode, 200);
+  assert.equal((await send({ method: 'POST', url: `${returnTaskPath}/return` })).json<Task>().status, 'AUTHORIZED');
+  const revokedAuthorization = (await send({ method: 'POST', url: `${returnTaskPath}/authorizations` })).json<TaskAuthorization>();
+  assert.equal((await send({ method: 'POST', url: `${returnTaskPath}/authorizations/${revokedAuthorization.id}/revoke` })).json<TaskAuthorization>().status, 'REVOKED');
+  assert.equal((await send({ method: 'POST', url: `${returnTaskPath}/runs`, payload: {
+    authorizationId: revokedAuthorization.id, actorName: 'manual-test', baseCommit: null,
+  } })).statusCode, 409);
+
+  const featureTasks = (await send({ method: 'GET', url: tasksPath })).json<Task[]>();
+  assert.deepEqual(featureTasks.map((item) => item.code), ['T02', 'T01', 'T03', 'T04']);
+  assert.equal(featureTasks.filter((item) => item.status === 'CONFIRMED').length, 1);
+  assert.deepEqual((await send({ method: 'GET', url: `${projectPath}/features/${userFeature.id}/tasks` })).json<Task[]>(), []);
+
   const missingSpec = await send({ method: 'GET', url: `${projectPath}/specifications/missing` });
   assert.equal(missingSpec.statusCode, 404);
   const createdSpec = await send({ method: 'POST', url: `${projectPath}/specifications`, payload: {
@@ -138,6 +260,9 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   const projectDetail = (await send({ method: 'GET', url: projectPath })).json<ProjectDetail>();
   assert.equal(projectDetail.modules.length, 1);
   assert.equal(projectDetail.features.length, 2);
+  assert.equal(projectDetail.tasks.length, 4);
+  assert.equal(projectDetail.authorizations.length, 5);
+  assert.equal(projectDetail.runs.length, 4);
   assert.equal(projectDetail.specifications.filter((item) => item.featureId === null).length, 1);
 
   await app.close();
@@ -147,4 +272,10 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   assert.equal((await send({ method: 'GET', url: `${specPath}/revisions/${revision1.id}` })).json<SpecificationRevision>().content, old.content);
   assert.equal((await send({ method: 'GET', url: `${projectPath}/features/${departmentFeature.id}` })).json<Feature>().status, 'DESIGNING');
   assert.equal((await send({ method: 'GET', url: featureSpecPath })).json<SpecificationDetail>().latestRevision?.id, featureRevision2.id);
+  const persistedTasks = (await send({ method: 'GET', url: tasksPath })).json<Task[]>();
+  assert.equal(persistedTasks.length, 4);
+  assert.equal(persistedTasks.find((item) => item.code === 'T02')?.status, 'CONFIRMED');
+  assert.equal((await send({ method: 'GET', url: `${projectPath}/runs` })).json<AiRun[]>().length, 4);
+  assert.equal((await send({ method: 'GET', url: `${projectPath}/runs/${submittedRun.id}` })).json<AiRun>().summary, '完成 Backend 实现');
+  assert.equal((await send({ method: 'GET', url: `${returnTaskPath}/authorizations` })).json<TaskAuthorization[]>()[0]?.status, 'REVOKED');
 });

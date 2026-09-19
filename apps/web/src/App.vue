@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import type {
-  AiScope, AiTokenSummary, ApiErrorResponse, CreatedAiToken, Feature, FeatureStatus, HealthResponse, Module, Project,
+  AiRun, AiScope, AiTokenSummary, ApiErrorResponse, CreatedAiToken, Feature, FeatureStatus, HealthResponse, Module, Project,
   ProjectDetail, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary,
-  SpecificationSummary,
+  SpecificationSummary, Task, TaskAuthorization, TaskStatus, TaskType, RunPhase,
 } from '@forgeflow/contracts';
 import './app.css';
 
@@ -40,14 +40,17 @@ const projectActivity = ref<RevisionActivity[]>([]);
 const selectedProjectId = ref<string | null>(null);
 const selectedSpecId = ref<string | null>(null);
 const selectedFeature = ref<Feature | null>(null);
-const featureTab = ref<'overview' | 'design' | 'history'>('overview');
+const featureTab = ref<'overview' | 'design' | 'plan' | 'history'>('overview');
 const collapsedModules = ref(new Set<string>());
+const expandedProgressFeatures = ref(new Set<string>());
 const workspacePage = ref<WorkspacePage>('projects');
 const documentMode = ref<'read' | 'edit'>('read');
 const showProjectDialog = ref(false);
 const showSpecDialog = ref(false);
 const showModuleDialog = ref(false);
 const showFeatureDialog = ref(false);
+const showTaskDialog = ref(false);
+const showRunSubmitDialog = ref(false);
 const mobileNavOpen = ref(false);
 const health = ref('连接中');
 const error = ref('');
@@ -69,6 +72,21 @@ const featureName = ref('');
 const featureSummary = ref('');
 const featureStatus = ref<FeatureStatus>('DRAFT');
 const featureSortOrder = ref(0);
+const editingTaskId = ref<string | null>(null);
+const taskCode = ref('');
+const taskName = ref('');
+const taskType = ref<TaskType>('OTHER');
+const taskStatus = ref<TaskStatus>('PLANNED');
+const taskObjective = ref('');
+const taskSortOrder = ref(0);
+const selectedRun = ref<AiRun | null>(null);
+const submittingRunId = ref<string | null>(null);
+const runSummary = ref('');
+const runResultCommit = ref('');
+const runChangedFiles = ref('');
+const runVerificationStatus = ref('PASS');
+const runVerificationSummary = ref('');
+const runIssues = ref('');
 const returnPageAfterCreate = ref<DocumentPage>('requirements');
 const draftContent = ref('');
 const draftSummary = ref('');
@@ -92,6 +110,16 @@ const featureStatuses: { value: FeatureStatus; label: string }[] = [
   { value: 'READY', label: '待实施' }, { value: 'IMPLEMENTING', label: '实施中' },
   { value: 'VERIFYING', label: '验证中' }, { value: 'ACCEPTANCE_PENDING', label: '待验收' },
   { value: 'ACCEPTED', label: '已验收' }, { value: 'DELIVERED', label: '已交付' },
+];
+const taskTypes: { value: TaskType; label: string }[] = [
+  { value: 'DESIGN', label: '设计' }, { value: 'BACKEND', label: 'Backend' },
+  { value: 'FRONTEND', label: 'Frontend' }, { value: 'INTEGRATION', label: '集成' },
+  { value: 'VERIFICATION', label: '验证' }, { value: 'OTHER', label: '其他实施' },
+];
+const taskStatuses: { value: TaskStatus; label: string }[] = [
+  { value: 'PLANNED', label: '待授权' }, { value: 'AUTHORIZED', label: '已授权' },
+  { value: 'RUNNING', label: '进行中' }, { value: 'SUBMITTED', label: '已提交' },
+  { value: 'CONFIRMED', label: '已确认' },
 ];
 const pageConfigs: Record<DocumentPage, { title: string; kind?: string; description: string; empty: string }> = {
   requirements: { title: '需求分析', kind: 'requirements', description: '维护项目背景、目标、范围、核心需求、约束和未决问题。', empty: '当前还没有需求分析资料。' },
@@ -127,6 +155,8 @@ const featureSpecification = computed(() => projectDetail.value?.specifications.
 const featureStatusCounts = computed(() => featureStatuses.map((status) => ({
   ...status, count: projectDetail.value?.features.filter((feature) => feature.status === status.value).length ?? 0,
 })).filter((status) => status.count > 0));
+const sortedRuns = computed(() => [...(projectDetail.value?.runs ?? [])].sort((a, b) =>
+  new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
 const technologySummary = computed(() => {
   if (workspacePage.value !== 'technology' || !selectedRevision.value?.content) return [];
   const labels: Record<string, string> = {
@@ -149,6 +179,33 @@ const technologySummary = computed(() => {
 function kindName(kind: string) { return kindNames[kind] ?? kind; }
 function statusName(status: FeatureStatus) { return featureStatuses.find((item) => item.value === status)?.label ?? status; }
 function featuresForModule(moduleId: string) { return projectDetail.value?.features.filter((item) => item.moduleId === moduleId) ?? []; }
+function tasksForFeature(featureId: string) { return projectDetail.value?.tasks.filter((item) => item.featureId === featureId) ?? []; }
+function taskTypeName(type: TaskType) { return taskTypes.find((item) => item.value === type)?.label ?? type; }
+function taskStatusName(status: TaskStatus) { return taskStatuses.find((item) => item.value === status)?.label ?? status; }
+function authorizationsForTask(taskId: string) { return projectDetail.value?.authorizations.filter((item) => item.taskId === taskId) ?? []; }
+function activeAuthorization(taskId: string) { return authorizationsForTask(taskId).find((item) => item.status === 'ACTIVE') ?? null; }
+function runsForTask(taskId: string) { return sortedRuns.value.filter((item) => item.taskId === taskId); }
+function latestRun(taskId: string) { return runsForTask(taskId)[0] ?? null; }
+function runNumber(run: AiRun) {
+  const chronological = [...(projectDetail.value?.runs ?? [])].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  return `RUN-${String(chronological.findIndex((item) => item.id === run.id) + 1).padStart(3, '0')}`;
+}
+function runStatusName(status: AiRun['status']) { return ({ RUNNING: '执行中', SUBMITTED: '已提交', FAILED: '失败', ABORTED: '已中断' })[status]; }
+function runPhaseName(phase: RunPhase) { return ({ PREPARING: '准备', IMPLEMENTING: '实施', TESTING: '验证', SUBMITTING: '提交' })[phase]; }
+function featureDisplayName(featureId: string) { return projectDetail.value?.features.find((item) => item.id === featureId)?.name ?? '未知功能'; }
+function taskNameById(taskId: string) { return projectDetail.value?.tasks.find((item) => item.id === taskId)?.name ?? '未知 Task'; }
+function hasFeatureDesign(featureId: string) {
+  return Boolean(projectDetail.value?.specifications.find((item) => item.featureId === featureId)?.latestRevisionNumber);
+}
+function taskProgress(featureId: string, types: TaskType[], emptyLabel: string) {
+  const items = tasksForFeature(featureId).filter((item) => types.includes(item.type));
+  if (!items.length) return emptyLabel;
+  return `${items.filter((item) => item.status === 'CONFIRMED').length} / ${items.length}`;
+}
+function implementationProgress(featureId: string) {
+  return taskProgress(featureId, ['BACKEND', 'FRONTEND', 'INTEGRATION', 'OTHER'], '未拆分');
+}
+function verificationProgress(featureId: string) { return taskProgress(featureId, ['VERIFICATION'], '—'); }
 function formatTime(value: string) { return new Date(value).toLocaleString('zh-CN', { hour12: false }); }
 function formatDate(value: string) { return new Date(value).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
 function clearMessage() { error.value = ''; notice.value = ''; }
@@ -199,7 +256,7 @@ async function loadWorkspace() {
   const entries = await Promise.all(projects.value.map(async (project) => {
     try {
       const detail = await api<ProjectDetail>(`/api/projects/${project.id}`); const activity = await collectActivity(detail);
-      const dates = [project.createdAt, ...detail.modules.map((item) => item.updatedAt), ...detail.features.map((item) => item.updatedAt), ...detail.specifications.map((item) => item.createdAt), ...activity.map((item) => item.createdAt)];
+      const dates = [project.createdAt, ...detail.modules.map((item) => item.updatedAt), ...detail.features.map((item) => item.updatedAt), ...detail.tasks.map((item) => item.updatedAt), ...detail.runs.map((item) => item.updatedAt), ...detail.specifications.map((item) => item.createdAt), ...activity.map((item) => item.createdAt)];
       return [project.id, { updatedAt: dates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]! }] as const;
     } catch { return [project.id, { updatedAt: project.createdAt }] as const; }
   }));
@@ -208,7 +265,9 @@ async function loadWorkspace() {
 async function refreshCurrentProject() {
   const id = selectedProjectId.value; if (!id) return;
   projectDetail.value = await api<ProjectDetail>(`/api/projects/${id}`); projectActivity.value = await collectActivity(projectDetail.value);
-  const dates = [projectDetail.value.project.createdAt, ...projectDetail.value.modules.map((item) => item.updatedAt), ...projectDetail.value.features.map((item) => item.updatedAt), ...projectDetail.value.specifications.map((item) => item.createdAt), ...projectActivity.value.map((item) => item.createdAt)];
+  if (selectedFeature.value) selectedFeature.value = projectDetail.value.features.find((item) => item.id === selectedFeature.value?.id) ?? null;
+  if (selectedRun.value) selectedRun.value = projectDetail.value.runs.find((item) => item.id === selectedRun.value?.id) ?? null;
+  const dates = [projectDetail.value.project.createdAt, ...projectDetail.value.modules.map((item) => item.updatedAt), ...projectDetail.value.features.map((item) => item.updatedAt), ...projectDetail.value.tasks.map((item) => item.updatedAt), ...projectDetail.value.runs.map((item) => item.updatedAt), ...projectDetail.value.specifications.map((item) => item.createdAt), ...projectActivity.value.map((item) => item.createdAt)];
   projectCardMeta.value[id] = { updatedAt: dates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]! };
 }
 async function selectProject(id: string) {
@@ -236,6 +295,7 @@ function navigate(page: WorkspacePage) {
   clearMessage(); mobileNavOpen.value = false;
   if (['requirements', 'architecture', 'technology'].includes(page)) { void openDocumentPage(page as DocumentPage); return; }
   workspacePage.value = page;
+  if (page === 'ai' && !selectedRun.value) selectedRun.value = sortedRuns.value[0] ?? null;
 }
 function openOtherMaterial(spec: SpecificationSummary) {
   if (spec.featureId) {
@@ -252,6 +312,11 @@ function toggleModule(moduleId: string) {
   const next = new Set(collapsedModules.value);
   if (next.has(moduleId)) next.delete(moduleId); else next.add(moduleId);
   collapsedModules.value = next;
+}
+function toggleProgressFeature(featureId: string) {
+  const next = new Set(expandedProgressFeatures.value);
+  if (next.has(featureId)) next.delete(featureId); else next.add(featureId);
+  expandedProgressFeatures.value = next;
 }
 function editModule(module?: Module) {
   editingModuleId.value = module?.id ?? null; moduleCode.value = module?.code ?? ''; moduleName.value = module?.name ?? '';
@@ -286,6 +351,73 @@ async function saveFeature() {
     notice.value = editingFeatureId.value ? '功能信息已更新' : '功能已创建';
   } catch (cause) { showError(cause); } finally { busy.value = false; }
 }
+function editTask(task?: Task) {
+  const feature = selectedFeature.value; if (!feature) return;
+  editingTaskId.value = task?.id ?? null;
+  taskCode.value = task?.code ?? `T${String(tasksForFeature(feature.id).length + 1).padStart(2, '0')}`;
+  taskName.value = task?.name ?? '';
+  taskType.value = task?.type ?? 'OTHER';
+  taskStatus.value = task?.status ?? 'PLANNED';
+  taskObjective.value = task?.objective ?? '';
+  taskSortOrder.value = task?.sortOrder ?? tasksForFeature(feature.id).length;
+  showTaskDialog.value = true;
+}
+async function saveTask() {
+  const projectId = selectedProjectId.value; const feature = selectedFeature.value;
+  if (!projectId || !feature) return;
+  clearMessage(); busy.value = true;
+  try {
+    const body = JSON.stringify({ code: taskCode.value, name: taskName.value, type: taskType.value, status: taskStatus.value, objective: taskObjective.value, sortOrder: taskSortOrder.value });
+    const base = `/api/projects/${projectId}/features/${feature.id}/tasks`;
+    const path = editingTaskId.value ? `${base}/${editingTaskId.value}` : base;
+    await api<Task>(path, { method: editingTaskId.value ? 'PATCH' : 'POST', body });
+    showTaskDialog.value = false; await refreshCurrentProject();
+    notice.value = editingTaskId.value ? '任务已更新' : '任务已创建';
+  } catch (cause) { showError(cause); } finally { busy.value = false; }
+}
+async function taskAction<T>(action: () => Promise<T>, success: string) {
+  clearMessage(); busy.value = true;
+  try { await action(); await refreshCurrentProject(); notice.value = success; }
+  catch (cause) { showError(cause); } finally { busy.value = false; }
+}
+function taskBase(task: Task) { return `/api/projects/${task.projectId}/features/${task.featureId}/tasks/${task.id}`; }
+function prepareAuthorization(task: Task) {
+  void taskAction(() => api<Task>(taskBase(task), { method: 'PATCH', body: JSON.stringify({ status: 'AUTHORIZED' }) }), 'Task 已进入待执行状态');
+}
+function approveTask(task: Task) {
+  void taskAction(() => api<TaskAuthorization>(`${taskBase(task)}/authorizations`, { method: 'POST' }), '人工授权已生效');
+}
+function revokeTaskAuthorization(task: Task, authorization: TaskAuthorization) {
+  void taskAction(() => api<TaskAuthorization>(`${taskBase(task)}/authorizations/${authorization.id}/revoke`, { method: 'POST' }), '授权已撤销');
+}
+function startManualRun(task: Task, authorization: TaskAuthorization) {
+  void taskAction(() => api<AiRun>(`${taskBase(task)}/runs`, { method: 'POST', body: JSON.stringify({ authorizationId: authorization.id, actorName: 'manual-test', baseCommit: null }) }), '模拟 Run 已启动');
+}
+function advanceRun(run: AiRun) {
+  const phases: RunPhase[] = ['PREPARING', 'IMPLEMENTING', 'TESTING', 'SUBMITTING'];
+  const next = phases[Math.min(phases.indexOf(run.phase) + 1, phases.length - 1)]!;
+  void taskAction(() => api<AiRun>(`/api/projects/${run.projectId}/runs/${run.id}/phase`, { method: 'PATCH', body: JSON.stringify({ phase: next }) }), `Run 已进入${runPhaseName(next)}阶段`);
+}
+function openRunSubmit(run: AiRun) {
+  submittingRunId.value = run.id; runSummary.value = ''; runResultCommit.value = ''; runChangedFiles.value = '';
+  runVerificationStatus.value = 'PASS'; runVerificationSummary.value = ''; runIssues.value = ''; showRunSubmitDialog.value = true;
+}
+async function submitRun() {
+  const projectId = selectedProjectId.value; const runId = submittingRunId.value; if (!projectId || !runId) return;
+  await taskAction(() => api<AiRun>(`/api/projects/${projectId}/runs/${runId}/submit`, { method: 'POST', body: JSON.stringify({
+    summary: runSummary.value, resultCommit: runResultCommit.value.trim() || null,
+    changedFiles: runChangedFiles.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+    verificationSummary: { status: runVerificationStatus.value, summary: runVerificationSummary.value },
+    issues: runIssues.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+  }) }), 'Run 结果已提交，等待人工确认');
+  if (!error.value) showRunSubmitDialog.value = false;
+}
+function finishRun(run: AiRun, status: 'fail' | 'abort') {
+  const summary = status === 'fail' ? '开发验证标记为失败' : '人工中断本次 Run';
+  void taskAction(() => api<AiRun>(`/api/projects/${run.projectId}/runs/${run.id}/${status}`, { method: 'POST', body: JSON.stringify({ summary, issues: [] }) }), status === 'fail' ? 'Run 已标记失败，需要重新授权' : 'Run 已中断，需要重新授权');
+}
+function confirmTask(task: Task) { void taskAction(() => api<Task>(`${taskBase(task)}/confirm`, { method: 'POST' }), 'Task 已人工确认完成'); }
+function returnTask(task: Task) { void taskAction(() => api<Task>(`${taskBase(task)}/return`, { method: 'POST' }), 'Task 已退回，重新执行前需要再次授权'); }
 async function openFeature(feature: Feature) {
   clearMessage(); selectedFeature.value = feature; workspacePage.value = 'feature-detail'; featureTab.value = 'overview'; documentMode.value = 'read'; mobileNavOpen.value = false;
   const spec = projectDetail.value?.specifications.find((item) => item.featureId === feature.id);
@@ -406,8 +538,8 @@ onMounted(async () => {
             <div class="overview-workbench">
               <section class="surface project-structure-summary"><div class="surface-heading"><div><span class="section-index">01</span><h2>项目结构</h2></div><button class="text-button" type="button" @click="navigate('features')">查看功能设计 →</button></div><div class="metric-strip"><div><strong>{{ projectDetail.modules.length }}</strong><span>模块</span></div><div><strong>{{ projectDetail.features.length }}</strong><span>功能</span></div></div><div v-if="featureStatusCounts.length" class="status-distribution"><span v-for="status in featureStatusCounts" :key="status.value"><b>{{ status.count }}</b>{{ status.label }}</span></div><div v-else class="empty-inline"><span>尚未创建真实 Module / Feature</span></div></section>
               <section class="surface lifecycle-panel"><div class="surface-heading"><div><span class="section-index">02</span><h2>研发入口</h2></div><span class="surface-note">基于真实数据</span></div><div class="lifecycle-list"><button type="button" @click="navigate('requirements')"><span>01</span><strong>需求分析</strong><small>{{ projectDetail.specifications.find(item => item.featureId === null && item.kind === 'requirements')?.latestRevisionNumber ? `REV ${projectDetail.specifications.find(item => item.featureId === null && item.kind === 'requirements')?.latestRevisionNumber}` : '尚无资料' }}</small><b>→</b></button><button type="button" @click="navigate('architecture')"><span>02</span><strong>架构设计</strong><small>{{ projectDetail.specifications.find(item => item.featureId === null && item.kind === 'architecture')?.latestRevisionNumber ? `REV ${projectDetail.specifications.find(item => item.featureId === null && item.kind === 'architecture')?.latestRevisionNumber}` : '尚无资料' }}</small><b>→</b></button><button type="button" @click="navigate('technology')"><span>03</span><strong>技术栈</strong><small>{{ projectDetail.specifications.find(item => item.featureId === null && item.kind === 'technology')?.latestRevisionNumber ? `REV ${projectDetail.specifications.find(item => item.featureId === null && item.kind === 'technology')?.latestRevisionNumber}` : '尚无资料' }}</small><b>→</b></button><button type="button" @click="navigate('features')"><span>04</span><strong>功能设计</strong><small>{{ projectDetail.modules.length }} 个模块 · {{ projectDetail.features.length }} 个功能</small><b>→</b></button><button type="button" @click="navigate('development')"><span>05</span><strong>开发进度</strong><small>{{ projectDetail.features.length ? '查看真实功能状态' : '暂无功能数据' }}</small><b>→</b></button></div></section>
-              <section class="surface work-status-panel"><div class="surface-heading"><div><span class="section-index">03</span><h2>当前工作</h2></div></div><div v-if="projectDetail.features.length" class="compact-feature-list"><button v-for="feature in projectDetail.features.slice(0, 5)" :key="feature.id" type="button" @click="openFeature(feature)"><span><strong>{{ feature.name }}</strong><small>{{ projectDetail.modules.find(item => item.id === feature.moduleId)?.name }}</small></span><span class="feature-status" :data-status="feature.status">{{ statusName(feature.status) }}</span></button></div><div v-else class="capability-empty"><span class="capability-mark">—</span><div><strong>暂无真实功能数据</strong><p>创建 Feature 后，这里显示实际状态；Task 与 AI Run 仍未开放。</p></div></div></section>
-              <section class="surface attention-surface"><div class="surface-heading"><div><span class="section-index">04</span><h2>需要我处理</h2></div></div><div class="capability-empty"><span class="capability-mark">—</span><div><strong>评审与验收能力尚未开放</strong><p>当前没有真实 Review、Task、Run 或 Acceptance 数据。</p></div></div></section>
+              <section class="surface work-status-panel"><div class="surface-heading"><div><span class="section-index">03</span><h2>当前工作</h2></div><span class="surface-note">{{ projectDetail.tasks.length }} 个 Task</span></div><div v-if="projectDetail.features.length" class="compact-feature-list"><button v-for="feature in projectDetail.features.slice(0, 5)" :key="feature.id" type="button" @click="openFeature(feature)"><span><strong>{{ feature.name }}</strong><small>{{ projectDetail.modules.find(item => item.id === feature.moduleId)?.name }} · 实施 {{ implementationProgress(feature.id) }}</small></span><span class="feature-status" :data-status="feature.status">{{ statusName(feature.status) }}</span></button></div><div v-else class="capability-empty"><span class="capability-mark">—</span><div><strong>暂无真实功能数据</strong><p>创建 Feature 与 Task 后，这里显示实际工作状态。</p></div></div></section>
+              <section class="surface attention-surface"><div class="surface-heading"><div><span class="section-index">04</span><h2>需要我处理</h2></div><span class="surface-note">{{ projectDetail.tasks.filter(item => item.status === 'SUBMITTED').length }} 待确认</span></div><div v-if="projectDetail.tasks.some(item => item.status === 'SUBMITTED')" class="compact-feature-list"><button v-for="task in projectDetail.tasks.filter(item => item.status === 'SUBMITTED').slice(0, 4)" :key="task.id" type="button" @click="openFeature(projectDetail.features.find(item => item.id === task.featureId)!); featureTab = 'plan'"><span><strong>{{ task.name }}</strong><small>{{ featureDisplayName(task.featureId) }} · Run 已提交</small></span><span class="task-status" data-status="SUBMITTED">待确认</span></button></div><div v-else class="capability-empty"><span class="capability-mark">—</span><div><strong>当前没有待确认的 Run</strong><p>Review 与 Acceptance 能力仍尚未开放。</p></div></div></section>
               <section class="surface changes-surface"><div class="surface-heading"><div><span class="section-index">05</span><h2>最近变化</h2></div><span class="surface-note">真实 Revision</span></div><div v-if="recentChanges.length" class="activity-list"><button v-for="activity in recentChanges.slice(0, 5)" :key="activity.id" type="button" @click="openOtherMaterial(activity.specification)"><span class="activity-mark">R{{ activity.revisionNo }}</span><span><strong>{{ kindName(activity.specification.kind) }} · {{ activity.specification.title }}</strong><small>{{ activity.changeSummary }} · {{ formatTime(activity.createdAt) }}</small></span><b>→</b></button></div><div v-else class="empty-inline"><span>暂无真实版本变化</span></div></section>
               <section v-if="otherMaterials.length" class="surface other-materials"><div class="surface-heading"><div><span class="section-index">06</span><h2>其他项目级资料</h2></div></div><div class="material-links"><button v-for="spec in otherMaterials" :key="spec.id" type="button" @click="openOtherMaterial(spec)"><span>§</span><strong>{{ spec.title }}</strong><small>{{ spec.latestRevisionNumber ? `REV ${spec.latestRevisionNumber}` : '尚无版本' }}</small><b>→</b></button></div></section>
             </div>
@@ -437,18 +569,65 @@ onMounted(async () => {
 
           <template v-if="workspacePage === 'feature-detail' && selectedFeature">
             <div class="feature-detail-heading"><button class="back-link" type="button" @click="navigate('features')">← 功能设计</button><div class="compact-page-heading"><div><p class="eyebrow">{{ selectedModule?.code }} / {{ selectedFeature.code }}</p><h1>{{ selectedFeature.name }}</h1><p>{{ selectedFeature.summary || '暂无功能摘要' }}</p></div><span class="feature-status large" :data-status="selectedFeature.status">{{ statusName(selectedFeature.status) }}</span></div></div>
-            <nav class="detail-tabs" aria-label="功能详情"><button :class="{ active: featureTab === 'overview' }" type="button" @click="featureTab = 'overview'; documentMode = 'read'">概览</button><button :class="{ active: featureTab === 'design' }" type="button" @click="featureTab = 'design'; documentMode = 'read'; selectedRevision = currentRevision">功能设计</button><button :class="{ active: featureTab === 'history' }" type="button" @click="featureTab = 'history'; documentMode = 'read'">版本历史</button></nav>
+            <nav class="detail-tabs" aria-label="功能详情"><button :class="{ active: featureTab === 'overview' }" type="button" @click="featureTab = 'overview'; documentMode = 'read'">概览</button><button :class="{ active: featureTab === 'design' }" type="button" @click="featureTab = 'design'; documentMode = 'read'; selectedRevision = currentRevision">功能设计</button><button :class="{ active: featureTab === 'plan' }" type="button" @click="featureTab = 'plan'; documentMode = 'read'">实施计划</button><button :class="{ active: featureTab === 'history' }" type="button" @click="featureTab = 'history'; documentMode = 'read'">版本历史</button></nav>
             <section v-if="featureTab === 'overview'" class="feature-overview-grid"><div class="surface feature-facts"><div class="surface-heading"><div><span class="section-index">INFO</span><h2>功能信息</h2></div><button class="text-button" type="button" @click="selectedModule && editFeature(selectedModule, selectedFeature)">编辑</button></div><dl><div><dt>功能名称</dt><dd>{{ selectedFeature.name }}</dd></div><div><dt>编号</dt><dd><code>{{ selectedFeature.code }}</code></dd></div><div><dt>所属模块</dt><dd>{{ selectedModule?.name ?? '—' }}</dd></div><div><dt>状态</dt><dd>{{ statusName(selectedFeature.status) }}</dd></div><div><dt>摘要</dt><dd>{{ selectedFeature.summary || '—' }}</dd></div><div><dt>创建时间</dt><dd>{{ formatTime(selectedFeature.createdAt) }}</dd></div><div><dt>更新时间</dt><dd>{{ formatTime(selectedFeature.updatedAt) }}</dd></div></dl></div><div class="surface design-status"><div class="surface-heading"><div><span class="section-index">DESIGN</span><h2>设计状态</h2></div></div><template v-if="currentRevision"><strong class="current-design">REV {{ currentRevision.revisionNo }}</strong><span>最近修改：{{ formatTime(currentRevision.createdAt) }}</span><button class="primary-button" type="button" @click="featureTab = 'design'; documentMode = 'read'">查看当前设计 →</button></template><template v-else><strong>尚未创建功能设计</strong><p>设计正文将复用统一的 Specification / Revision 版本机制。</p><button class="primary-button" type="button" @click="createFeatureDesign">创建第一版设计</button></template></div></section>
             <template v-if="featureTab === 'design'">
               <div class="feature-design-actions"><div><span>当前设计</span><strong>{{ currentRevision ? `REV ${currentRevision.revisionNo}` : '尚无版本' }}</strong></div><button class="primary-button" type="button" @click="createFeatureDesign">{{ currentRevision ? '创建新版本' : '创建第一版设计' }}</button></div>
               <article v-if="documentMode === 'read'" class="surface feature-design-reader"><div v-if="selectedRevision" class="document-statusbar"><div><span class="status-tag planning">{{ selectedRevision.id === currentRevision?.id ? '当前版本' : '历史版本 · 只读' }}</span><strong>Revision {{ selectedRevision.revisionNo }}</strong></div><small>{{ formatTime(selectedRevision.createdAt) }}</small></div><div v-if="selectedRevision" class="markdown-body" v-html="renderMarkdown(selectedRevision.content)"></div><div v-else class="empty-state document-empty"><span>R0</span><h3>尚未创建功能设计</h3><p>创建首个 Revision 后会默认以阅读模式展示。</p></div></article>
               <div v-else class="revision-create-layout"><form class="surface revision-editor" @submit.prevent="createRevision"><div class="surface-heading"><div><span class="section-index">NEW</span><h2>创建功能设计 Revision</h2></div><span class="surface-note">历史版本不可覆盖</span></div><div class="editor-fields"><label for="feature-change-summary">变更摘要</label><input id="feature-change-summary" v-model="draftSummary" maxlength="500" required /><div class="field-row"><label for="feature-markdown-content">Markdown 正文</label><span>{{ draftContent.length }} / 200000</span></div><textarea id="feature-markdown-content" v-model="draftContent" maxlength="200000" required spellcheck="false"></textarea><div class="form-footer"><p>保存时提交 expectedHeadRevisionId，并形成不可变新版本。</p><div><button class="secondary-button" type="button" @click="cancelRevision">取消</button><button class="primary-button" type="submit" :disabled="busy">保存新 Revision →</button></div></div></div></form><aside class="surface reference-panel"><div class="surface-heading"><div><span class="section-index">REF</span><h2>当前版本参考</h2></div></div><pre>{{ currentRevision?.content ?? '当前没有可参考的版本正文。' }}</pre></aside></div>
             </template>
+            <section v-if="featureTab === 'plan'" class="surface task-plan">
+              <div class="surface-heading"><div><span class="section-index">TASK</span><h2>实施计划</h2></div><button class="primary-button" type="button" @click="editTask()">＋ 新建 Task</button></div>
+              <div class="task-list-head"><span>排序 / 编号</span><span>任务</span><span>类型</span><span>状态</span><span>操作</span></div>
+              <div v-if="tasksForFeature(selectedFeature.id).length" class="task-list execution-list">
+                <article v-for="task in tasksForFeature(selectedFeature.id)" :key="task.id" class="task-entry">
+                  <div class="task-row execution-row">
+                    <span><b>{{ String(task.sortOrder).padStart(2, '0') }}</b><code>{{ task.code }}</code></span>
+                    <span><strong>{{ task.name }}</strong><small>{{ task.objective || '未填写任务目标' }}</small></span>
+                    <span>{{ taskTypeName(task.type) }}</span>
+                    <span class="task-status" :data-status="task.status">{{ taskStatusName(task.status) }}<small>{{ task.status }}</small></span>
+                    <button class="text-button" type="button" @click="editTask(task)">编辑</button>
+                  </div>
+                  <div class="execution-control">
+                    <template v-if="task.status === 'PLANNED'">
+                      <p><strong>等待人工授权</strong><span>批准前不能启动 Run。</span></p>
+                      <button class="secondary-button" type="button" :disabled="busy" @click="prepareAuthorization(task)">设为待执行</button>
+                    </template>
+                    <template v-else-if="task.status === 'AUTHORIZED' && !activeAuthorization(task.id)">
+                      <p><strong>尚无有效授权</strong><span>历史失败、撤销或退回不会自动生成新授权。</span></p>
+                      <button class="primary-button" type="button" :disabled="busy" @click="approveTask(task)">批准执行</button>
+                    </template>
+                    <template v-else-if="task.status === 'AUTHORIZED' && activeAuthorization(task.id)">
+                      <p><strong class="authorization-active">授权 ACTIVE</strong><span>{{ formatTime(activeAuthorization(task.id)!.authorizedAt) }}</span></p>
+                      <div class="inline-actions"><button class="secondary-button dev-action" type="button" :disabled="busy" @click="startManualRun(task, activeAuthorization(task.id)!)">开始模拟 Run（验证）</button><button class="danger-text" type="button" :disabled="busy" @click="revokeTaskAuthorization(task, activeAuthorization(task.id)!)">撤销授权</button></div>
+                    </template>
+                    <template v-else-if="task.status === 'RUNNING' && latestRun(task.id)">
+                      <p><strong>{{ runNumber(latestRun(task.id)!) }} · {{ runPhaseName(latestRun(task.id)!.phase) }}</strong><span>执行者 {{ latestRun(task.id)!.actorName }} · {{ latestRun(task.id)!.actorType }}</span></p>
+                      <div class="inline-actions"><button v-if="latestRun(task.id)!.phase !== 'SUBMITTING'" class="secondary-button" type="button" :disabled="busy" @click="advanceRun(latestRun(task.id)!)">推进阶段</button><button class="primary-button" type="button" :disabled="busy" @click="openRunSubmit(latestRun(task.id)!)">提交结果</button><button class="danger-text" type="button" :disabled="busy" @click="finishRun(latestRun(task.id)!, 'fail')">标记失败</button><button class="text-button" type="button" :disabled="busy" @click="finishRun(latestRun(task.id)!, 'abort')">中断</button></div>
+                    </template>
+                    <template v-else-if="task.status === 'SUBMITTED' && latestRun(task.id)">
+                      <p><strong>{{ runNumber(latestRun(task.id)!) }} 已提交</strong><span>{{ latestRun(task.id)!.summary }} · 修改文件 {{ latestRun(task.id)!.changedFiles.length }} · 验证 {{ latestRun(task.id)!.verificationSummary?.status ?? '未填写' }}</span></p>
+                      <div class="inline-actions"><button class="primary-button" type="button" :disabled="busy" @click="confirmTask(task)">确认完成</button><button class="secondary-button" type="button" :disabled="busy" @click="returnTask(task)">退回重新执行</button></div>
+                    </template>
+                    <template v-else><p><strong>已人工确认</strong><span>仅 CONFIRMED Task 计入开发进度；历史 Run {{ runsForTask(task.id).length }} 条。</span></p></template>
+                  </div>
+                </article>
+              </div>
+              <div v-else class="progress-empty"><strong>尚未拆分实施 Task</strong><p>按实际交付边界创建 Task，不会自动按技术分层拆分。</p><button class="primary-button" type="button" @click="editTask()">创建第一个 Task</button></div>
+            </section>
             <section v-if="featureTab === 'history'" class="surface feature-history"><div class="surface-heading"><div><span class="section-index">REV</span><h2>版本历史</h2></div><span class="count-label">{{ revisions.length }}</span></div><div v-if="revisions.length" class="history-split"><div class="revision-list"><button v-for="revision in revisions" :key="revision.id" type="button" :class="{ active: selectedRevision?.id === revision.id }" @click="selectHistory(revision.id)"><span class="revision-number">R{{ revision.revisionNo }}</span><span><strong>{{ revision.changeSummary }}</strong><small>{{ formatTime(revision.createdAt) }}</small></span><b>{{ revision.id === currentRevision?.id ? '当前' : '→' }}</b></button></div><article class="history-preview"><div v-if="selectedRevision" class="markdown-body" v-html="renderMarkdown(selectedRevision.content)"></div></article></div><div v-else class="progress-empty"><strong>暂无设计版本</strong><p>功能设计创建后会在这里保留只读历史。</p></div></section>
           </template>
 
-          <template v-if="workspacePage === 'development'"><div class="compact-page-heading"><div><p class="eyebrow">05 / DELIVERY</p><h1>开发进度</h1><p>基于真实 Feature 状态查看当前功能清单。</p></div></div><section class="surface progress-list"><div class="feature-progress-head"><span>模块</span><span>功能</span><span>编号</span><span>状态</span></div><template v-if="projectDetail.features.length"><button v-for="feature in projectDetail.features" :key="feature.id" class="feature-progress-row" type="button" @click="openFeature(feature)"><span>{{ projectDetail.modules.find(item => item.id === feature.moduleId)?.name ?? '—' }}</span><strong>{{ feature.name }}</strong><code>{{ feature.code }}</code><span class="feature-status" :data-status="feature.status">{{ statusName(feature.status) }}</span></button><div class="progress-note">实施进度将在 Task 模型启用后计算；当前不显示百分比。</div></template><div v-else class="progress-empty"><strong>当前没有可展示的功能</strong><p>创建 Feature 后，这里会显示真实状态；不会计算虚假进度。</p></div></section></template>
-          <template v-if="workspacePage === 'testing' || workspacePage === 'ai'"><div class="compact-page-heading"><div><p class="eyebrow">{{ workspacePage === 'testing' ? '06 / QUALITY' : '07 / AI RUNS' }}</p><h1>{{ workspacePage === 'testing' ? '测试与验收' : 'AI 执行记录' }}</h1><p>{{ workspacePage === 'testing' ? '未来展示 Feature → Test → Acceptance。' : '未来展示 Codex / Claude 的真实 Run。' }}</p></div></div><section class="surface formal-empty single"><span class="empty-code">NOT AVAILABLE</span><h2>{{ workspacePage === 'testing' ? 'Test 与 Acceptance 模型尚未开放' : 'AI Run 模型尚未开放' }}</h2><p>当前没有真实数据，因此不展示模拟结果、状态或数量。</p></section></template>
+          <template v-if="workspacePage === 'development'"><div class="compact-page-heading"><div><p class="eyebrow">05 / DELIVERY</p><h1>开发进度</h1><p>按 Module → Feature → Task 查看真实研发清单；进度只来自 Task 状态。</p></div></div><section class="surface progress-list"><div class="development-head"><span>模块 / 功能</span><span>状态</span><span>设计</span><span>实施</span><span>验证</span></div><template v-if="projectDetail.features.length"><div v-for="module in projectDetail.modules" :key="module.id" class="development-module"><div class="development-module-name"><strong>{{ module.name }}</strong><code>{{ module.code }}</code></div><template v-for="feature in featuresForModule(module.id)" :key="feature.id"><button class="development-feature-row" type="button" @click="toggleProgressFeature(feature.id)"><span><b>{{ expandedProgressFeatures.has(feature.id) ? '▾' : '▸' }}</b><strong>{{ feature.name }}</strong><code>{{ feature.code }}</code></span><span class="feature-status" :data-status="feature.status">{{ statusName(feature.status) }}</span><span>{{ hasFeatureDesign(feature.id) ? '✓ 已有设计' : '未设计' }}</span><span>{{ implementationProgress(feature.id) }}</span><span>{{ verificationProgress(feature.id) }}</span></button><div v-if="expandedProgressFeatures.has(feature.id)" class="development-tasks"><button v-for="task in tasksForFeature(feature.id)" :key="task.id" type="button" @click="openFeature(feature); featureTab = 'plan'"><span><code>{{ task.code }}</code><strong>{{ task.name }}</strong></span><span>{{ taskTypeName(task.type) }}</span><span class="task-status" :data-status="task.status">{{ task.status }}</span><span>{{ task.objective || '—' }}</span></button><div v-if="!tasksForFeature(feature.id).length" class="development-no-tasks">未拆分 Task</div></div></template></div><div class="progress-note">实施列只统计 BACKEND / FRONTEND / INTEGRATION / OTHER；DESIGN 不计入实施，VERIFICATION 单独统计。Feature 状态仍由人工维护。</div></template><div v-else class="progress-empty"><strong>当前没有可展示的功能</strong><p>创建 Feature 后，这里会显示真实状态；不会计算虚假进度。</p></div></section></template>
+          <template v-if="workspacePage === 'testing'"><div class="compact-page-heading"><div><p class="eyebrow">06 / QUALITY</p><h1>测试与验收</h1><p>未来展示 Feature → Test → Acceptance。</p></div></div><section class="surface formal-empty single"><span class="empty-code">NOT AVAILABLE</span><h2>Test 与 Acceptance 模型尚未开放</h2><p>当前没有真实数据，因此不展示模拟结果、状态或数量。</p></section></template>
+          <template v-if="workspacePage === 'ai'">
+            <div class="compact-page-heading"><div><p class="eyebrow">07 / AI RUNS</p><h1>AI 执行记录</h1><p>记录每次授权后的真实 Run 生命周期；本轮仅提供手工模拟入口，不连接 AI Runner。</p></div></div>
+            <section v-if="sortedRuns.length" class="run-workbench">
+              <div class="surface run-ledger"><div class="run-ledger-head"><span>Run</span><span>功能 / Task</span><span>状态</span><span>执行者</span><span>开始时间</span></div><button v-for="run in sortedRuns" :key="run.id" type="button" :class="{ active: selectedRun?.id === run.id }" @click="selectedRun = run"><strong>{{ runNumber(run) }}</strong><span>{{ featureDisplayName(run.featureId) }}<small>{{ taskNameById(run.taskId) }}</small></span><span class="run-status" :data-status="run.status">{{ runStatusName(run.status) }}</span><span>{{ run.actorName }}<small>{{ run.actorType }}</small></span><time>{{ formatTime(run.startedAt) }}</time></button></div>
+              <aside v-if="selectedRun" class="surface run-detail"><div class="surface-heading"><div><span class="section-index">RUN</span><h2>{{ runNumber(selectedRun) }}</h2></div><span class="run-status" :data-status="selectedRun.status">{{ selectedRun.status }}</span></div><dl><div><dt>Task</dt><dd>{{ featureDisplayName(selectedRun.featureId) }} / {{ taskNameById(selectedRun.taskId) }}</dd></div><div><dt>Authorization</dt><dd><code>{{ selectedRun.authorizationId }}</code></dd></div><div><dt>Actor</dt><dd>{{ selectedRun.actorName }} · {{ selectedRun.actorType }}</dd></div><div><dt>Phase</dt><dd>{{ runPhaseName(selectedRun.phase) }}（{{ selectedRun.phase }}）</dd></div><div><dt>baseCommit</dt><dd><code>{{ selectedRun.baseCommit || '—' }}</code></dd></div><div><dt>resultCommit</dt><dd><code>{{ selectedRun.resultCommit || '—' }}</code></dd></div></dl><div class="run-result"><h3>结果摘要</h3><p>{{ selectedRun.summary || '尚未提交结果' }}</p><h3>修改文件</h3><ul v-if="selectedRun.changedFiles.length"><li v-for="file in selectedRun.changedFiles" :key="file"><code>{{ file }}</code></li></ul><p v-else>—</p><h3>验证</h3><p>{{ selectedRun.verificationSummary ? `${selectedRun.verificationSummary.status} · ${selectedRun.verificationSummary.summary}` : '—' }}</p><h3>问题</h3><ul v-if="selectedRun.issues.length"><li v-for="issue in selectedRun.issues" :key="issue">{{ issue }}</li></ul><p v-else>—</p></div><div class="run-timeline"><span>创建 {{ formatTime(selectedRun.createdAt) }}</span><span>开始 {{ formatTime(selectedRun.startedAt) }}</span><span v-if="selectedRun.submittedAt">提交 {{ formatTime(selectedRun.submittedAt) }}</span><span v-if="selectedRun.finishedAt">结束 {{ formatTime(selectedRun.finishedAt) }}</span></div></aside>
+            </section>
+            <section v-else class="surface formal-empty single"><span class="empty-code">NO RUNS</span><h2>当前还没有执行记录</h2><p>在 Feature 实施计划中完成人工授权后，可使用开发验证入口启动首个 Run。</p></section>
+          </template>
           <template v-if="workspacePage === 'history'"><div class="compact-page-heading"><div><p class="eyebrow">08 / HISTORY</p><h1>版本与历史</h1><p>项目现有设计资料的真实 Revision 记录。</p></div></div><section class="surface history-stream"><div class="history-stream-head"><span>版本</span><span>设计资料</span><span>变更摘要</span><span>来源</span><span>时间</span></div><button v-for="activity in projectActivity" :key="activity.id" type="button" @click="openOtherMaterial(activity.specification)"><span class="revision-number">R{{ activity.revisionNo }}</span><strong>{{ kindName(activity.specification.kind) }} · {{ activity.specification.title }}</strong><span>{{ activity.changeSummary }}</span><span>{{ sourceName(activity.source) }}</span><time>{{ formatTime(activity.createdAt) }}</time></button><div v-if="!projectActivity.length" class="progress-empty"><strong>暂无 Revision 历史</strong><p>创建项目级设计资料版本后会在这里显示。</p></div></section></template>
         </main>
       </div>
@@ -458,5 +637,7 @@ onMounted(async () => {
     <div v-if="showSpecDialog" class="dialog-backdrop" @click.self="showSpecDialog = false"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="spec-dialog-title"><div class="dialog-heading"><div><p class="eyebrow">PROJECT DOCUMENT</p><h2 id="spec-dialog-title">创建{{ activeDocumentConfig.title }}</h2></div><button type="button" aria-label="关闭" @click="showSpecDialog = false">×</button></div><form class="form-stack" @submit.prevent="createSpecification"><label for="spec-title">资料名称</label><input id="spec-title" v-model="specTitle" maxlength="120" required /><p class="form-hint">正文将在下一步以 Markdown 创建首个 Revision。</p><div class="dialog-actions"><button class="secondary-button" type="button" @click="showSpecDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">创建并编辑 <span>→</span></button></div></form></section></div>
     <div v-if="showModuleDialog" class="dialog-backdrop" @click.self="showModuleDialog = false"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="module-dialog-title"><div class="dialog-heading"><div><p class="eyebrow">MODULE</p><h2 id="module-dialog-title">{{ editingModuleId ? '编辑模块' : '新建模块' }}</h2></div><button type="button" aria-label="关闭" @click="showModuleDialog = false">×</button></div><form class="form-stack" @submit.prevent="saveModule"><label for="module-name">模块名称</label><input id="module-name" v-model="moduleName" maxlength="120" required /><label for="module-code">模块编号</label><input id="module-code" v-model="moduleCode" maxlength="40" required placeholder="例如 IAM" /><label for="module-description">说明</label><textarea id="module-description" v-model="moduleDescription" maxlength="500"></textarea><label for="module-sort">排序值</label><input id="module-sort" v-model.number="moduleSortOrder" type="number" min="0" step="1" required /><div class="dialog-actions"><button class="secondary-button" type="button" @click="showModuleDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">{{ editingModuleId ? '保存修改' : '创建模块' }} →</button></div></form></section></div>
     <div v-if="showFeatureDialog" class="dialog-backdrop" @click.self="showFeatureDialog = false"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="feature-dialog-title"><div class="dialog-heading"><div><p class="eyebrow">FEATURE</p><h2 id="feature-dialog-title">{{ editingFeatureId ? '编辑功能' : '新建功能' }}</h2></div><button type="button" aria-label="关闭" @click="showFeatureDialog = false">×</button></div><form class="form-stack" @submit.prevent="saveFeature"><label for="feature-module">所属模块</label><select id="feature-module" v-model="featureModuleId" required><option v-for="module in projectDetail?.modules ?? []" :key="module.id" :value="module.id">{{ module.name }}</option></select><label for="feature-name">功能名称</label><input id="feature-name" v-model="featureName" maxlength="120" required /><label for="feature-code">功能编号</label><input id="feature-code" v-model="featureCode" maxlength="40" required placeholder="例如 P2-W03" /><label for="feature-summary">摘要</label><textarea id="feature-summary" v-model="featureSummary" maxlength="1000"></textarea><div class="dialog-grid"><label>状态<select v-model="featureStatus"><option v-for="status in featureStatuses" :key="status.value" :value="status.value">{{ status.label }}（{{ status.value }}）</option></select></label><label>排序值<input v-model.number="featureSortOrder" type="number" min="0" step="1" required /></label></div><div class="dialog-actions"><button class="secondary-button" type="button" @click="showFeatureDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">{{ editingFeatureId ? '保存修改' : '创建功能' }} →</button></div></form></section></div>
+    <div v-if="showTaskDialog" class="dialog-backdrop" @click.self="showTaskDialog = false"><section class="dialog task-dialog" role="dialog" aria-modal="true" aria-labelledby="task-dialog-title"><div class="dialog-heading"><div><p class="eyebrow">TASK</p><h2 id="task-dialog-title">{{ editingTaskId ? '编辑 Task' : '新建 Task' }}</h2></div><button type="button" aria-label="关闭" @click="showTaskDialog = false">×</button></div><form class="form-stack" @submit.prevent="saveTask"><div class="dialog-grid"><label>任务名称<input v-model="taskName" maxlength="120" required /></label><label>任务编号<input v-model="taskCode" maxlength="40" required placeholder="例如 T01" /></label></div><label for="task-objective">任务目标</label><textarea id="task-objective" v-model="taskObjective" maxlength="2000" placeholder="说明完成此 Task 应达到的具体结果"></textarea><div class="dialog-grid"><label>类型<select v-model="taskType"><option v-for="type in taskTypes" :key="type.value" :value="type.value">{{ type.label }}（{{ type.value }}）</option></select></label><label>状态<select v-model="taskStatus" :disabled="!editingTaskId || !['PLANNED', 'AUTHORIZED'].includes(taskStatus)"><option value="PLANNED">待授权（PLANNED）</option><option value="AUTHORIZED">已授权（AUTHORIZED）</option><option v-if="!['PLANNED', 'AUTHORIZED'].includes(taskStatus)" :value="taskStatus">{{ taskStatusName(taskStatus) }}（{{ taskStatus }}）</option></select></label></div><label>排序值<input v-model.number="taskSortOrder" type="number" min="0" step="1" required /></label><p class="form-hint">RUNNING / SUBMITTED / CONFIRMED 只允许通过授权、Run 与人工确认操作产生，不能在表单中伪造。</p><div class="dialog-actions"><button class="secondary-button" type="button" @click="showTaskDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">{{ editingTaskId ? '保存修改' : '创建 Task' }} →</button></div></form></section></div>
+    <div v-if="showRunSubmitDialog" class="dialog-backdrop" @click.self="showRunSubmitDialog = false"><section class="dialog run-submit-dialog" role="dialog" aria-modal="true" aria-labelledby="run-submit-title"><div class="dialog-heading"><div><p class="eyebrow">RUN RESULT</p><h2 id="run-submit-title">提交 Run 结果</h2></div><button type="button" aria-label="关闭" @click="showRunSubmitDialog = false">×</button></div><form class="form-stack" @submit.prevent="submitRun"><label>结果摘要<textarea v-model="runSummary" maxlength="4000" required placeholder="说明本次 Run 完成了什么"></textarea></label><label>resultCommit（可空）<input v-model="runResultCommit" maxlength="120" placeholder="例如 abc123" /></label><label>修改文件（每行一个）<textarea v-model="runChangedFiles" maxlength="20000" spellcheck="false" placeholder="apps/server/src/...&#10;apps/web/src/..."></textarea></label><div class="dialog-grid"><label>验证状态<input v-model="runVerificationStatus" maxlength="40" required placeholder="PASS / FAIL / NOT_RUN" /></label><label>验证摘要<input v-model="runVerificationSummary" maxlength="2000" required placeholder="例如 typecheck、build、test 通过" /></label></div><label>问题（每行一个，可空）<textarea v-model="runIssues" maxlength="20000"></textarea></label><p class="form-hint">提交后 Run 与历史结果不可覆盖；Task 进入 SUBMITTED，仍需人工确认。</p><div class="dialog-actions"><button class="secondary-button" type="button" @click="showRunSubmitDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">提交结果 →</button></div></form></section></div>
   </div>
 </template>

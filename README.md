@@ -1,6 +1,6 @@
 # ForgeFlow
 
-ForgeFlow 是面向人和外部 AI 的研发控制台。当前实现 Project → Module → Feature → Feature Design Revision 的基础闭环，并保留 AI Token 接入能力。
+ForgeFlow 是面向人和外部 AI 的研发控制台。当前实现 Project → Module → Feature → Task、Feature Design Revision，以及 Task Authorization → AI Run → 人工确认的最小执行控制闭环。当前 Run 仅由 REST 或 Web 验证入口驱动，不包含 MCP、Runner 或 Shell 执行。
 
 ## 环境
 
@@ -44,6 +44,12 @@ pnpm start:server
 打开 `http://127.0.0.1:5173/` 后直接进入本地项目列表，无需 Web 登录。进入项目后可维护模块与功能，并在 Feature 详情中创建版本化 Markdown 设计。项目级需求、架构、技术栈与 Feature 设计共用 `rd_spec` / `rd_spec_revision`：`feature_id` 为空表示项目级资料，非空表示 Feature 设计。历史 Revision 只读；创建新 Revision 时，API 要求 `expectedHeadRevisionId` 等于当前最新 Revision ID（初版为 `null`），旧页面提交会收到 409，Web 会保留草稿供对照。
 
 Module API：`GET/POST /api/projects/:projectId/modules`、`PATCH /api/projects/:projectId/modules/:moduleId`。Feature API：`GET/POST /api/projects/:projectId/features`（可用 `moduleId` 查询参数过滤）、`GET/PATCH /api/projects/:projectId/features/:featureId`。本阶段不提供删除接口。
+
+Task API：`GET/POST /api/projects/:projectId/features/:featureId/tasks`、`GET/PATCH /api/projects/:projectId/features/:featureId/tasks/:taskId`。Task 不会自动拆分，也不会自动推动 Feature 状态。普通编辑只允许 `PLANNED ↔ AUTHORIZED`；`RUNNING`、`SUBMITTED`、`CONFIRMED` 必须由执行闭环产生。开发进度中的实施列仅统计 `BACKEND`、`FRONTEND`、`INTEGRATION`、`OTHER`，验证列单独统计 `VERIFICATION`，统一显示 `CONFIRMED 数 / 总数`，不生成百分比。
+
+Authorization API：`GET/POST .../tasks/:taskId/authorizations`、`POST .../authorizations/:authorizationId/revoke`。批准、撤销、确认和退回只接受本地 Web 或 Owner Session 的人工操作；Bearer AI Token 无权伪造授权。同一 Task 同时最多一个 `ACTIVE` Authorization。
+
+Run API：`POST .../tasks/:taskId/runs`、`GET /api/projects/:projectId/runs`、`GET /api/projects/:projectId/runs/:runId`，以及 Run 的 `PATCH .../phase`、`POST .../submit|fail|abort`。启动时事务校验 Task、ACTIVE Authorization 和并行 Run；提交时原子更新 Run → `SUBMITTED`、Task → `SUBMITTED`、Authorization → `CONSUMED`。失败或中断保留历史并将 Task 返回 `AUTHORIZED`，重新运行前必须产生新授权。人工确认和退回分别使用 `POST .../tasks/:taskId/confirm|return`。
 
 Specification API 继续使用 `POST /api/projects/:projectId/specifications`、`GET /api/projects/:projectId/specifications/:specId`，以及该规格下的 `POST/GET .../revisions`、`GET .../revisions/:revisionId`。新 Revision 的 `source` 由服务端认证身份生成；旧数据中的 `api` 或 `unknown` 保留原值。
 

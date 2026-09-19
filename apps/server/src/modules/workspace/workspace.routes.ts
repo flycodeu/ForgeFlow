@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { FeatureStatus } from '@forgeflow/contracts';
+import type { FeatureStatus, RunPhase, RunVerificationSummary, TaskStatus, TaskType } from '@forgeflow/contracts';
 import { ApiError } from '../../shared/api-error.js';
 import { AuthService } from '../security/auth.service.js';
 import { WorkspaceService } from './workspace.service.js';
@@ -7,11 +7,17 @@ import { WorkspaceService } from './workspace.service.js';
 type ProjectParams = { projectId: string };
 type ModuleParams = ProjectParams & { moduleId: string };
 type FeatureParams = ProjectParams & { featureId: string };
+type TaskParams = FeatureParams & { taskId: string };
+type AuthorizationParams = TaskParams & { authorizationId: string };
+type RunParams = ProjectParams & { runId: string };
 type SpecParams = ProjectParams & { specId: string };
 type RevisionParams = SpecParams & { revisionId: string };
 const FEATURE_STATUSES: readonly FeatureStatus[] = [
   'DRAFT', 'DESIGNING', 'READY', 'IMPLEMENTING', 'VERIFYING', 'ACCEPTANCE_PENDING', 'ACCEPTED', 'DELIVERED',
 ];
+const TASK_TYPES: readonly TaskType[] = ['DESIGN', 'BACKEND', 'FRONTEND', 'INTEGRATION', 'VERIFICATION', 'OTHER'];
+const TASK_STATUSES: readonly TaskStatus[] = ['PLANNED', 'AUTHORIZED', 'RUNNING', 'SUBMITTED', 'CONFIRMED'];
+const RUN_PHASES: readonly RunPhase[] = ['PREPARING', 'IMPLEMENTING', 'TESTING', 'SUBMITTING'];
 
 function bodyObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -64,6 +70,55 @@ function statusField(body: Record<string, unknown>, required: boolean): FeatureS
     throw new ApiError(400, 'INVALID_INPUT', '功能状态不合法');
   }
   return body.status as FeatureStatus;
+}
+
+function taskTypeField(body: Record<string, unknown>, required: boolean): TaskType | undefined {
+  if (!Object.hasOwn(body, 'type')) return required ? 'OTHER' : undefined;
+  if (typeof body.type !== 'string' || !TASK_TYPES.includes(body.type as TaskType)) {
+    throw new ApiError(400, 'INVALID_INPUT', '任务类型不合法');
+  }
+  return body.type as TaskType;
+}
+
+function taskStatusField(body: Record<string, unknown>, required: boolean): TaskStatus | undefined {
+  if (!Object.hasOwn(body, 'status')) return required ? 'PLANNED' : undefined;
+  if (typeof body.status !== 'string' || !TASK_STATUSES.includes(body.status as TaskStatus)) {
+    throw new ApiError(400, 'INVALID_INPUT', '任务状态不合法');
+  }
+  return body.status as TaskStatus;
+}
+
+function uuidField(body: Record<string, unknown>, key: string, label: string) {
+  const value = textField(body, key, label, 64);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+    throw new ApiError(400, 'INVALID_INPUT', `${label}不合法`);
+  }
+  return value;
+}
+
+function nullableTextField(body: Record<string, unknown>, key: string, label: string, maxLength: number) {
+  if (!Object.hasOwn(body, key) || body[key] === null || body[key] === '') return null;
+  return textField(body, key, label, maxLength);
+}
+
+function stringListField(body: Record<string, unknown>, key: string, label: string, maxItems: number) {
+  const value = body[key];
+  if (!Array.isArray(value) || value.length > maxItems || value.some((item) => typeof item !== 'string' || !item.trim() || item.length > 500)) {
+    throw new ApiError(400, 'INVALID_INPUT', `${label}必须是最多 ${maxItems} 项的非空字符串数组`);
+  }
+  return value.map((item) => (item as string).trim());
+}
+
+function verificationSummaryField(body: Record<string, unknown>): RunVerificationSummary {
+  const value = body.verificationSummary;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ApiError(400, 'INVALID_INPUT', '验证摘要必须是 JSON 对象');
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    status: textField(record, 'status', '验证状态', 40),
+    summary: textField(record, 'summary', '验证说明', 2000, true),
+  };
 }
 
 export function registerWorkspaceRoutes(app: FastifyInstance, service: WorkspaceService, auth: AuthService) {
@@ -148,6 +203,129 @@ export function registerWorkspaceRoutes(app: FastifyInstance, service: Workspace
       summary: optionalTextField(body, 'summary', '功能摘要', 1000, true),
       status: statusField(body, false),
       sortOrder: sortOrderField(body, false),
+    });
+  });
+
+  app.get<{ Params: FeatureParams }>('/api/projects/:projectId/features/:featureId/tasks', async (request) => {
+    await auth.require(request, 'project:read', true);
+    return service.listTasks(request.params.projectId, request.params.featureId);
+  });
+
+  app.post<{ Params: FeatureParams }>('/api/projects/:projectId/features/:featureId/tasks', async (request, reply) => {
+    await auth.require(request, 'spec:write', true);
+    const body = bodyObject(request.body);
+    return reply.code(201).send(service.createTask(request.params.projectId, request.params.featureId, {
+      code: codeField(body, 'code', '任务编号', true)!,
+      name: textField(body, 'name', '任务名称', 120),
+      type: taskTypeField(body, true)!,
+      status: taskStatusField(body, true)!,
+      objective: optionalTextField(body, 'objective', '任务目标', 2000, true) ?? '',
+      sortOrder: sortOrderField(body, true)!,
+    }));
+  });
+
+  app.get<{ Params: TaskParams }>('/api/projects/:projectId/features/:featureId/tasks/:taskId', async (request) => {
+    await auth.require(request, 'project:read', true);
+    return service.getTask(request.params.projectId, request.params.featureId, request.params.taskId);
+  });
+
+  app.patch<{ Params: TaskParams }>('/api/projects/:projectId/features/:featureId/tasks/:taskId', async (request) => {
+    await auth.require(request, 'spec:write', true);
+    const body = bodyObject(request.body);
+    return service.updateTask(request.params.projectId, request.params.featureId, request.params.taskId, {
+      code: codeField(body, 'code', '任务编号', false),
+      name: optionalTextField(body, 'name', '任务名称', 120),
+      type: taskTypeField(body, false),
+      status: taskStatusField(body, false),
+      objective: optionalTextField(body, 'objective', '任务目标', 2000, true),
+      sortOrder: sortOrderField(body, false),
+    });
+  });
+
+  app.get<{ Params: TaskParams }>('/api/projects/:projectId/features/:featureId/tasks/:taskId/authorizations', async (request) => {
+    await auth.require(request, 'project:read', true);
+    return service.listAuthorizations(request.params.projectId, request.params.featureId, request.params.taskId);
+  });
+
+  app.post<{ Params: TaskParams }>('/api/projects/:projectId/features/:featureId/tasks/:taskId/authorizations', async (request, reply) => {
+    await auth.require(request, 'owner', true);
+    return reply.code(201).send(service.authorizeTask(request.params.projectId, request.params.featureId, request.params.taskId));
+  });
+
+  app.post<{ Params: AuthorizationParams }>('/api/projects/:projectId/features/:featureId/tasks/:taskId/authorizations/:authorizationId/revoke', async (request) => {
+    await auth.require(request, 'owner', true);
+    return service.revokeAuthorization(request.params.projectId, request.params.featureId, request.params.taskId, request.params.authorizationId);
+  });
+
+  app.post<{ Params: TaskParams }>('/api/projects/:projectId/features/:featureId/tasks/:taskId/runs', async (request, reply) => {
+    const principal = await auth.require(request, 'spec:write', true);
+    const body = bodyObject(request.body);
+    const actorName = principal.kind === 'ai_token' ? principal.name
+      : optionalTextField(body, 'actorName', '执行者名称', 80) ?? (principal.kind === 'owner' ? principal.username : 'manual-test');
+    return reply.code(201).send(service.startRun(request.params.projectId, request.params.featureId, request.params.taskId, {
+      authorizationId: uuidField(body, 'authorizationId', 'Authorization ID'),
+      actorType: principal.kind === 'ai_token' ? 'AI_TOKEN' : 'MANUAL',
+      actorName,
+      baseCommit: nullableTextField(body, 'baseCommit', '基础 Commit', 100),
+    }));
+  });
+
+  app.post<{ Params: TaskParams }>('/api/projects/:projectId/features/:featureId/tasks/:taskId/confirm', async (request) => {
+    await auth.require(request, 'owner', true);
+    return service.confirmTask(request.params.projectId, request.params.featureId, request.params.taskId);
+  });
+
+  app.post<{ Params: TaskParams }>('/api/projects/:projectId/features/:featureId/tasks/:taskId/return', async (request) => {
+    await auth.require(request, 'owner', true);
+    return service.returnTask(request.params.projectId, request.params.featureId, request.params.taskId);
+  });
+
+  app.get<{ Params: ProjectParams }>('/api/projects/:projectId/runs', async (request) => {
+    await auth.require(request, 'project:read', true);
+    return service.listRuns(request.params.projectId);
+  });
+
+  app.get<{ Params: RunParams }>('/api/projects/:projectId/runs/:runId', async (request) => {
+    await auth.require(request, 'project:read', true);
+    return service.getRun(request.params.projectId, request.params.runId);
+  });
+
+  app.patch<{ Params: RunParams }>('/api/projects/:projectId/runs/:runId/phase', async (request) => {
+    await auth.require(request, 'spec:write', true);
+    const body = bodyObject(request.body);
+    if (typeof body.phase !== 'string' || !RUN_PHASES.includes(body.phase as RunPhase)) {
+      throw new ApiError(400, 'INVALID_INPUT', 'Run 阶段不合法');
+    }
+    return service.updateRunPhase(request.params.projectId, request.params.runId, body.phase as RunPhase);
+  });
+
+  app.post<{ Params: RunParams }>('/api/projects/:projectId/runs/:runId/submit', async (request) => {
+    await auth.require(request, 'spec:write', true);
+    const body = bodyObject(request.body);
+    return service.submitRun(request.params.projectId, request.params.runId, {
+      summary: textField(body, 'summary', '执行摘要', 4000, true),
+      resultCommit: nullableTextField(body, 'resultCommit', '结果 Commit', 100),
+      changedFiles: stringListField(body, 'changedFiles', '修改文件', 500),
+      verificationSummary: verificationSummaryField(body),
+      issues: stringListField(body, 'issues', '问题列表', 100),
+    });
+  });
+
+  app.post<{ Params: RunParams }>('/api/projects/:projectId/runs/:runId/fail', async (request) => {
+    await auth.require(request, 'spec:write', true);
+    const body = bodyObject(request.body);
+    return service.finishRun(request.params.projectId, request.params.runId, 'FAILED', {
+      summary: textField(body, 'summary', '失败摘要', 4000, true),
+      issues: stringListField(body, 'issues', '问题列表', 100),
+    });
+  });
+
+  app.post<{ Params: RunParams }>('/api/projects/:projectId/runs/:runId/abort', async (request) => {
+    await auth.require(request, 'spec:write', true);
+    const body = bodyObject(request.body);
+    return service.finishRun(request.params.projectId, request.params.runId, 'ABORTED', {
+      summary: textField(body, 'summary', '中断摘要', 4000, true),
+      issues: stringListField(body, 'issues', '问题列表', 100),
     });
   });
 

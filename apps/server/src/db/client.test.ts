@@ -36,9 +36,10 @@ test('empty database migrates, enforces keys, and survives a second open', (t) =
   const tables = first.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
     .all() as { name: string }[];
   assert.deepEqual(tables.map((row) => row.name), [
-    '__drizzle_migrations', 'rd_ai_token', 'rd_feature', 'rd_module', 'rd_owner', 'rd_owner_session', 'rd_project', 'rd_spec', 'rd_spec_revision',
+    '__drizzle_migrations', 'rd_ai_run', 'rd_ai_token', 'rd_feature', 'rd_module', 'rd_owner', 'rd_owner_session', 'rd_project',
+    'rd_spec', 'rd_spec_revision', 'rd_task', 'rd_task_authorization',
   ]);
-  assert.equal(migrationCount(first.sqlite), 4);
+  assert.equal(migrationCount(first.sqlite), 6);
   assert.equal(first.sqlite.pragma('foreign_keys', { simple: true }), 1);
   assert.equal(first.sqlite.pragma('journal_mode', { simple: true }), 'wal');
   assert.equal(first.sqlite.pragma('busy_timeout', { simple: true }), 5000);
@@ -59,6 +60,19 @@ test('empty database migrates, enforces keys, and survives a second open', (t) =
     .run('feature-1', 'project-1', 'module-1', 'USER', 'User management', '', 'DESIGNING', 0, now, now);
   assert.throws(() => first.sqlite.prepare('INSERT INTO rd_feature (id, project_id, module_id, code, name, summary, status, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .run('feature-2', 'project-1', 'module-1', 'INVALID', 'Invalid', '', 'BLOCKED', 0, now, now), /CHECK/);
+  const insertTask = first.sqlite.prepare('INSERT INTO rd_task (id, project_id, feature_id, code, name, type, status, objective, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  insertTask.run('task-1', 'project-1', 'feature-1', 'T01', 'Backend', 'BACKEND', 'RUNNING', 'Build API', 0, now, now);
+  assert.throws(() => insertTask.run('task-2', 'project-1', 'feature-1', 'T01', 'Duplicate', 'FRONTEND', 'PLANNED', '', 1, now, now), /UNIQUE/);
+  assert.throws(() => insertTask.run('task-3', 'project-1', 'feature-1', 'T03', 'Invalid type', 'TEST', 'PLANNED', '', 2, now, now), /CHECK/);
+  assert.throws(() => insertTask.run('task-4', 'project-1', 'feature-1', 'T04', 'Invalid status', 'OTHER', 'BLOCKED', '', 3, now, now), /CHECK/);
+  const insertAuthorization = first.sqlite.prepare('INSERT INTO rd_task_authorization (id, task_id, project_id, feature_id, status, authorized_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  insertAuthorization.run('auth-1', 'task-1', 'project-1', 'feature-1', 'ACTIVE', now, now);
+  assert.throws(() => insertAuthorization.run('auth-2', 'task-1', 'project-1', 'feature-1', 'ACTIVE', now, now), /UNIQUE/);
+  assert.throws(() => insertAuthorization.run('auth-3', 'task-1', 'project-1', 'feature-1', 'REVOKED', now, now), /CHECK/);
+  const insertRun = first.sqlite.prepare('INSERT INTO rd_ai_run (id, project_id, feature_id, task_id, authorization_id, actor_type, actor_name, status, phase, started_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  insertRun.run('run-1', 'project-1', 'feature-1', 'task-1', 'auth-1', 'MANUAL', 'manual-test', 'RUNNING', 'PREPARING', now, now, now);
+  assert.throws(() => insertRun.run('run-2', 'project-1', 'feature-1', 'task-1', 'auth-1', 'MANUAL', 'manual-test', 'RUNNING', 'IMPLEMENTING', now, now, now), /UNIQUE/);
+  assert.throws(() => insertRun.run('run-3', 'project-1', 'feature-1', 'task-1', 'auth-1', 'MANUAL', 'manual-test', 'RUNNING', 'DEPLOYING', now, now, now), /CHECK/);
 
   first.sqlite.prepare('INSERT INTO rd_spec (id, project_id, kind, title, created_at) VALUES (?, ?, ?, ?, ?)')
     .run('spec-1', 'project-1', 'requirements', 'Requirements', now);
@@ -75,8 +89,10 @@ test('empty database migrates, enforces keys, and survives a second open', (t) =
   first.sqlite.close();
 
   second = openDatabase(fixture.path);
-  assert.equal(migrationCount(second.sqlite), 4);
+  assert.equal(migrationCount(second.sqlite), 6);
   assert.equal((second.sqlite.prepare('SELECT count(*) AS count FROM rd_spec_revision').get() as { count: number }).count, 1);
+  assert.equal((second.sqlite.prepare('SELECT status FROM rd_task WHERE id = ?').get('task-1') as { status: string }).status, 'RUNNING');
+  assert.equal((second.sqlite.prepare('SELECT phase FROM rd_ai_run WHERE id = ?').get('run-1') as { phase: string }).phase, 'PREPARING');
 });
 
 test('health endpoint probes the migrated database', async (t) => {
@@ -127,7 +143,7 @@ test('migration upgrades S1-T02 revisions and backfills the latest pointer', (t)
   legacy.close();
 
   upgraded = openDatabase(fixture.path);
-  assert.equal(migrationCount(upgraded.sqlite), 4);
+  assert.equal(migrationCount(upgraded.sqlite), 6);
   assert.equal((upgraded.sqlite.prepare('SELECT latest_revision_id AS id FROM rd_spec WHERE id = ?').get('s1') as { id: string }).id, 'r2');
   assert.deepEqual(upgraded.sqlite.prepare('SELECT markdown, source, change_summary AS summary FROM rd_spec_revision WHERE id = ?').get('r1'), {
     markdown: '# Original', source: 'unknown', summary: '未记录（旧版）',

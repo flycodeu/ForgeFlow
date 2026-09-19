@@ -29,6 +29,20 @@
       "when": 1789787433879,
       "tag": "0003_fearless_nova",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1789789065966,
+      "tag": "0004_abandoned_eddie_brock",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1789790350672,
+      "tag": "0005_ambiguous_cable",
+      "breakpoints": true
     }
   ]
 }

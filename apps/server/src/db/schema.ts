@@ -39,6 +39,68 @@ export const features = sqliteTable('rd_feature', {
   check('rd_feature_status_allowed', sql`${table.status} in ('DRAFT', 'DESIGNING', 'READY', 'IMPLEMENTING', 'VERIFYING', 'ACCEPTANCE_PENDING', 'ACCEPTED', 'DELIVERED')`),
 ]);
 
+export const tasks = sqliteTable('rd_task', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'restrict' }),
+  featureId: text('feature_id').notNull().references(() => features.id, { onDelete: 'restrict' }),
+  code: text('code').notNull(),
+  name: text('name').notNull(),
+  type: text('type').notNull().default('OTHER'),
+  status: text('status').notNull().default('PLANNED'),
+  objective: text('objective').notNull().default(''),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  uniqueIndex('rd_task_feature_code_unique').on(table.featureId, table.code),
+  check('rd_task_sort_order_non_negative', sql`${table.sortOrder} >= 0`),
+  check('rd_task_type_allowed', sql`${table.type} in ('DESIGN', 'BACKEND', 'FRONTEND', 'INTEGRATION', 'VERIFICATION', 'OTHER')`),
+  check('rd_task_status_allowed', sql`${table.status} in ('PLANNED', 'AUTHORIZED', 'RUNNING', 'SUBMITTED', 'CONFIRMED')`),
+]);
+
+export const taskAuthorizations = sqliteTable('rd_task_authorization', {
+  id: text('id').primaryKey(),
+  taskId: text('task_id').notNull().references(() => tasks.id, { onDelete: 'restrict' }),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'restrict' }),
+  featureId: text('feature_id').notNull().references(() => features.id, { onDelete: 'restrict' }),
+  status: text('status').notNull().default('ACTIVE'),
+  authorizedAt: integer('authorized_at', { mode: 'timestamp_ms' }).notNull(),
+  revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  uniqueIndex('rd_task_authorization_active_unique').on(table.taskId).where(sql`${table.status} = 'ACTIVE'`),
+  check('rd_task_authorization_status_allowed', sql`${table.status} in ('ACTIVE', 'REVOKED', 'CONSUMED')`),
+  check('rd_task_authorization_revoked_time', sql`(${table.status} = 'REVOKED' and ${table.revokedAt} is not null) or (${table.status} != 'REVOKED' and ${table.revokedAt} is null)`),
+]);
+
+export const aiRuns = sqliteTable('rd_ai_run', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'restrict' }),
+  featureId: text('feature_id').notNull().references(() => features.id, { onDelete: 'restrict' }),
+  taskId: text('task_id').notNull().references(() => tasks.id, { onDelete: 'restrict' }),
+  authorizationId: text('authorization_id').notNull().references(() => taskAuthorizations.id, { onDelete: 'restrict' }),
+  actorType: text('actor_type').notNull(),
+  actorName: text('actor_name').notNull(),
+  status: text('status').notNull().default('RUNNING'),
+  phase: text('phase').notNull().default('PREPARING'),
+  baseCommit: text('base_commit'),
+  resultCommit: text('result_commit'),
+  summary: text('summary').notNull().default(''),
+  changedFiles: text('changed_files').notNull().default('[]'),
+  verificationSummary: text('verification_summary'),
+  issues: text('issues').notNull().default('[]'),
+  startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+  submittedAt: integer('submitted_at', { mode: 'timestamp_ms' }),
+  finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  uniqueIndex('rd_ai_run_running_task_unique').on(table.taskId).where(sql`${table.status} = 'RUNNING'`),
+  check('rd_ai_run_actor_type_allowed', sql`${table.actorType} in ('MANUAL', 'AI_TOKEN')`),
+  check('rd_ai_run_status_allowed', sql`${table.status} in ('RUNNING', 'SUBMITTED', 'FAILED', 'ABORTED')`),
+  check('rd_ai_run_phase_allowed', sql`${table.phase} in ('PREPARING', 'IMPLEMENTING', 'TESTING', 'SUBMITTING')`),
+]);
+
 export const specifications = sqliteTable('rd_spec', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'restrict' }),

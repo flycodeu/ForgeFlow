@@ -1,6 +1,8 @@
 import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import type { openDatabase } from '../../db/client.js';
-import { features, modules, projects, specificationRevisions, specifications } from '../../db/schema.js';
+import {
+  aiRuns, features, modules, projects, specificationRevisions, specifications, taskAuthorizations, tasks,
+} from '../../db/schema.js';
 
 type Connection = ReturnType<typeof openDatabase>;
 
@@ -62,6 +64,88 @@ export class WorkspaceRepository {
   updateFeature(projectId: string, featureId: string, values: Partial<typeof features.$inferInsert>) {
     return this.connection.db.update(features).set(values)
       .where(and(eq(features.projectId, projectId), eq(features.id, featureId))).run().changes;
+  }
+
+  insertTask(task: typeof tasks.$inferInsert) {
+    this.connection.db.insert(tasks).values(task).run();
+  }
+
+  listTasks(projectId: string, featureId?: string) {
+    const predicate = featureId
+      ? and(eq(tasks.projectId, projectId), eq(tasks.featureId, featureId))
+      : eq(tasks.projectId, projectId);
+    return this.connection.db.select().from(tasks).where(predicate)
+      .orderBy(asc(tasks.sortOrder), asc(tasks.createdAt), asc(tasks.name)).all();
+  }
+
+  findTask(projectId: string, featureId: string, taskId: string) {
+    return this.connection.db.select().from(tasks)
+      .where(and(eq(tasks.projectId, projectId), eq(tasks.featureId, featureId), eq(tasks.id, taskId))).get();
+  }
+
+  updateTask(projectId: string, featureId: string, taskId: string, values: Partial<typeof tasks.$inferInsert>) {
+    return this.connection.db.update(tasks).set(values)
+      .where(and(eq(tasks.projectId, projectId), eq(tasks.featureId, featureId), eq(tasks.id, taskId))).run().changes;
+  }
+
+  updateTaskStatus(projectId: string, featureId: string, taskId: string, expectedStatus: string, status: string, updatedAt: Date) {
+    return this.connection.db.update(tasks).set({ status, updatedAt })
+      .where(and(eq(tasks.projectId, projectId), eq(tasks.featureId, featureId), eq(tasks.id, taskId), eq(tasks.status, expectedStatus)))
+      .run().changes;
+  }
+
+  insertAuthorization(authorization: typeof taskAuthorizations.$inferInsert) {
+    this.connection.db.insert(taskAuthorizations).values(authorization).run();
+  }
+
+  listAuthorizations(projectId: string, taskId?: string) {
+    const predicate = taskId
+      ? and(eq(taskAuthorizations.projectId, projectId), eq(taskAuthorizations.taskId, taskId))
+      : eq(taskAuthorizations.projectId, projectId);
+    return this.connection.db.select().from(taskAuthorizations).where(predicate)
+      .orderBy(desc(taskAuthorizations.createdAt)).all();
+  }
+
+  findAuthorization(projectId: string, taskId: string, authorizationId: string) {
+    return this.connection.db.select().from(taskAuthorizations)
+      .where(and(eq(taskAuthorizations.projectId, projectId), eq(taskAuthorizations.taskId, taskId), eq(taskAuthorizations.id, authorizationId))).get();
+  }
+
+  findActiveAuthorization(projectId: string, taskId: string) {
+    return this.connection.db.select().from(taskAuthorizations)
+      .where(and(eq(taskAuthorizations.projectId, projectId), eq(taskAuthorizations.taskId, taskId), eq(taskAuthorizations.status, 'ACTIVE'))).get();
+  }
+
+  updateAuthorizationStatus(authorizationId: string, expectedStatus: string, status: string, revokedAt: Date | null) {
+    return this.connection.db.update(taskAuthorizations).set({ status, revokedAt })
+      .where(and(eq(taskAuthorizations.id, authorizationId), eq(taskAuthorizations.status, expectedStatus))).run().changes;
+  }
+
+  insertRun(run: typeof aiRuns.$inferInsert) {
+    this.connection.db.insert(aiRuns).values(run).run();
+  }
+
+  listRuns(projectId: string, taskId?: string) {
+    const predicate = taskId
+      ? and(eq(aiRuns.projectId, projectId), eq(aiRuns.taskId, taskId))
+      : eq(aiRuns.projectId, projectId);
+    return this.connection.db.select().from(aiRuns).where(predicate)
+      .orderBy(desc(aiRuns.createdAt)).all();
+  }
+
+  findRun(projectId: string, runId: string) {
+    return this.connection.db.select().from(aiRuns)
+      .where(and(eq(aiRuns.projectId, projectId), eq(aiRuns.id, runId))).get();
+  }
+
+  findRunningRun(projectId: string, taskId: string) {
+    return this.connection.db.select().from(aiRuns)
+      .where(and(eq(aiRuns.projectId, projectId), eq(aiRuns.taskId, taskId), eq(aiRuns.status, 'RUNNING'))).get();
+  }
+
+  updateRun(runId: string, expectedStatus: string, values: Partial<typeof aiRuns.$inferInsert>) {
+    return this.connection.db.update(aiRuns).set(values)
+      .where(and(eq(aiRuns.id, runId), eq(aiRuns.status, expectedStatus))).run().changes;
   }
 
   insertSpecification(specification: typeof specifications.$inferInsert) {
