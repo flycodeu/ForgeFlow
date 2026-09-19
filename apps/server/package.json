@@ -1,0 +1,26 @@
+{
+  "name": "@forgeflow/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "test": "tsx --test src/db/client.test.ts src/modules/workspace/workspace.test.ts src/modules/security/auth.test.ts"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.1.2",
+    "@forgeflow/contracts": "workspace:*",
+    "better-sqlite3": "13.0.3",
+    "drizzle-orm": "0.45.2",
+    "fastify": "5.12.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "^24.0.0",
+    "tsx": "4.23.13"
+  }
+}
