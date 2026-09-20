@@ -7,9 +7,9 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @forgeflow/server --filter @forgeflow/web dev",
-    "dev:server": "pnpm --filter @forgeflow/server dev",
-    "dev:web": "pnpm --filter @forgeflow/web dev",
+    "dev": "node scripts/free-dev-ports.mjs && node scripts/run-dev.mjs",
+    "dev:server": "node scripts/free-dev-ports.mjs --server && pnpm --filter @forgeflow/server dev",
+    "dev:web": "node scripts/free-dev-ports.mjs --web && pnpm --filter @forgeflow/web dev",
     "typecheck": "pnpm -r typecheck",
     "build": "pnpm -r build",
     "start:server": "pnpm --filter @forgeflow/server start",
