@@ -79,13 +79,27 @@ test('Owner session and scoped AI Token persist and revoke without storing secre
   assert.equal(listed.some((item) => 'token' in item || 'tokenHash' in item), false);
   assert.ok(listed.find((item) => item.id === readOnly.id)?.lastUsedAt);
   assert.ok(listed.find((item) => item.id === writer.id)?.lastUsedAt);
+
+  const rotatedResponse = await app.inject({
+    method: 'POST', url: `/api/ai-tokens/${writer.id}/rotate`, headers: ownerHeaders,
+  });
+  assert.equal(rotatedResponse.statusCode, 200);
+  const rotated = rotatedResponse.json<CreatedAiToken>();
+  assert.match(rotated.token, /^ffai_/);
+  assert.notEqual(rotated.token, writer.token);
+  assert.equal(rotated.name, writer.name);
+  assert.deepEqual(rotated.scopes, writer.scopes);
+  assert.equal((await app.inject({ method: 'GET', url: specPath, headers: writeHeaders })).statusCode, 401);
+  const rotatedHeaders = { authorization: `Bearer ${rotated.token}` };
+  assert.equal((await app.inject({ method: 'POST', url: `${specPath}/revisions`, headers: rotatedHeaders,
+    payload: { content: '# Rotated AI content', changeSummary: 'Rotated', expectedHeadRevisionId: aiRevision.json<SpecificationRevision>().id } })).statusCode, 201);
   const sqlite = new Database(path, { readonly: true });
   try {
     const ownerRow = sqlite.prepare('SELECT password_hash AS hash, password_salt AS salt FROM rd_owner').get() as { hash: string; salt: string };
     assert.notEqual(ownerRow.hash, password);
     assert.equal(ownerRow.salt.length, 32);
     const tokenRows = sqlite.prepare('SELECT token_hash AS hash FROM rd_ai_token').all() as { hash: string }[];
-    assert.equal(tokenRows.every((row) => row.hash !== readOnly.token && row.hash !== writer.token), true);
+    assert.equal(tokenRows.every((row) => row.hash !== readOnly.token && row.hash !== writer.token && row.hash !== rotated.token), true);
     assert.ok(tokenRows.some((row) => row.hash === createHash('sha256').update(readOnly.token).digest('hex')));
     const sessionRows = sqlite.prepare('SELECT session_hash AS hash FROM rd_owner_session').all() as { hash: string }[];
     const rawSession = cookie.slice(cookie.indexOf('=') + 1);
@@ -106,7 +120,7 @@ test('Owner session and scoped AI Token persist and revoke without storing secre
   await app.close();
   app = createApp(path);
   assert.deepEqual((await app.inject({ method: 'GET', url: '/api/auth/status' })).json(), { initialized: true });
-  assert.equal((await app.inject({ method: 'GET', url: '/api/projects', headers: writeHeaders })).statusCode, 403);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/projects', headers: rotatedHeaders })).statusCode, 403);
   assert.equal((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'owner', password } })).statusCode, 200);
 });
 

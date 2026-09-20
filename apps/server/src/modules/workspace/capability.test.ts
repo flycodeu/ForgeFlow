@@ -54,6 +54,9 @@ test('AUTO Capability flow adapts design, executes without authorization, and ro
   const guidance = value<CapabilityDesignGuidance>(await mcp(token.token, 'get_capability_design_guidance', { capabilityId: capability.id }));
   assert.equal(guidance.profile, 'WEB');
   assert.match(guidance.markdownTemplate, /API \/ 协议/);
+  assert.match(guidance.markdownTemplate, /## 1\. 功能定义/);
+  assert.match(guidance.markdownTemplate, /## 8\. 异常、边界与恢复/);
+  assert.match(guidance.markdownTemplate, /## 12\. 验收用例与证据/);
   value(await mcp(token.token, 'create_capability_design', { capabilityId: capability.id, changeSummary: '初版', content: guidance.markdownTemplate }));
   const context = value<CapabilityDetail>(await mcp(token.token, 'get_capability_context', { projectId: project.id, featureId: feature.id, capabilityId: capability.id }));
   assert.equal(context.design?.latestRevision?.revisionNo, 1);

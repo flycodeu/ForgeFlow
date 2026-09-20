@@ -10,8 +10,9 @@
     "start": "node dist/server.js",
     "db:migrate": "tsx src/db/migrate.ts",
     "seed:demo:projects": "tsx src/scripts/seed-demo-projects.ts",
+    "seed:demo:note": "tsx src/scripts/seed-note-list-demo.ts",
     "seed:demo": "pnpm seed:demo:projects && tsx src/scripts/seed-demo-engineering.ts",
-    "test": "tsx --test src/db/client.test.ts src/modules/workspace/workspace.test.ts src/modules/workspace/review.test.ts src/modules/workspace/design-guidance.test.ts src/modules/workspace/capability.test.ts src/modules/workspace/engineering-blueprint.test.ts src/modules/workspace/engineering-revision.test.ts src/modules/workspace/source-binding.test.ts src/modules/security/auth.test.ts src/modules/mcp/mcp.test.ts src/modules/mcp/planning.test.ts"
+    "test": "tsx --test --test-concurrency=1 src/db/client.test.ts src/modules/workspace/workspace.test.ts src/modules/workspace/review.test.ts src/modules/workspace/design-guidance.test.ts src/modules/workspace/capability.test.ts src/modules/workspace/engineering-blueprint.test.ts src/modules/workspace/engineering-revision.test.ts src/modules/workspace/source-binding.test.ts src/modules/security/auth.test.ts src/modules/mcp/mcp.test.ts src/modules/mcp/planning.test.ts"
   },
   "dependencies": {
     "@fastify/cookie": "11.1.2",

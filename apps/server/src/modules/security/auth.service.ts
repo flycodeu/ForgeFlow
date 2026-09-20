@@ -138,6 +138,29 @@ export class AuthService {
     return tokenView(this.repository.findToken(id)!);
   }
 
+  rotateToken(id: string): CreatedAiToken {
+    const current = this.repository.findToken(id);
+    if (!current) throw new ApiError(404, 'TOKEN_NOT_FOUND', '连接凭证不存在');
+    if (current.revokedAt) throw new ApiError(409, 'TOKEN_REVOKED', '已撤销的连接不能重新配置，请新建连接');
+    const secret = `ffai_${randomBytes(32).toString('base64url')}`;
+    const replacement = {
+      id: randomUUID(), ownerId: current.ownerId, name: current.name, tokenHash: hash(secret),
+      scopes: current.scopes, createdAt: new Date(), lastUsedAt: null, revokedAt: null,
+    };
+    this.repository.transaction(() => {
+      this.repository.revokeToken(current.id, replacement.createdAt);
+      this.repository.insertToken(replacement);
+    });
+    return { ...tokenView(replacement), token: secret };
+  }
+
+  deleteToken(id: string) {
+    const token = this.repository.findToken(id);
+    if (!token) throw new ApiError(404, 'TOKEN_NOT_FOUND', 'Token 不存在');
+    this.repository.deleteToken(id);
+    return { ok: true };
+  }
+
   private ensureCompatibilityOwner() {
     if (this.repository.findOwner()) return;
     this.repository.transaction(() => {

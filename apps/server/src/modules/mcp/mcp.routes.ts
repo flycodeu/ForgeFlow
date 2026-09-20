@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type {
-  AiScope, CapabilityStatus, ProjectSourceKind, RequestSourceAnalysisInput, ResolveProjectSourcesInput, RunPhase,
+  AiScope, CapabilityStatus, ProjectSourceKind, RequestSourceAnalysisInput, ResolveProjectSourcesInput, RunPhase, SubmitSourceAnalysisInput,
   RunChangedFile, RunReportedStatus, RunSourceExecution, TaskCategory, TaskType, UpsertProjectSourceInput, WorkflowMode,
 } from '@forgeflow/contracts';
 import { McpServer } from '@modelcontextprotocol/server';
@@ -28,6 +28,8 @@ const TOOL_SCOPES: Record<string, AiScope[]> = {
   create_project_draft: ['project:write'],
   upsert_project_source: ['planning:write'],
   request_source_analysis: ['planning:write'],
+  claim_source_analysis: ['planning:write'],
+  submit_source_analysis: ['planning:write'],
   create_project_spec: ['planning:write'],
   create_spec_revision: ['planning:write'],
   create_module: ['planning:write'],
@@ -170,6 +172,27 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
     }).strict(),
     annotations: { destructiveHint: false, openWorldHint: false },
   }, safely((input: RequestSourceAnalysisInput) => workspace.requestSourceAnalysis(input)));
+
+  server.registerTool('claim_source_analysis', {
+    title: '领取源码分析请求',
+    description: '把 WAITING_AI 请求置为 READING，并返回已登记 Source、环境位置、范围和排除规则。只领取，不读取文件。',
+    inputSchema: z.object({ projectId: z.string().uuid(), analysisId: z.string().uuid() }).strict(),
+    annotations: { destructiveHint: false, openWorldHint: false },
+  }, safely(({ projectId, analysisId }: { projectId: string; analysisId: string }) =>
+    workspace.claimSourceAnalysis(projectId, analysisId)));
+
+  server.registerTool('submit_source_analysis', {
+    title: '提交源码分析结果',
+    description: '写回只读源码分析的快照、代码引用、摘要、检查点与错误；不会修改业务源码或自动创建功能。',
+    inputSchema: z.object({
+      projectId: z.string().uuid(), analysisId: z.string().uuid(), status: z.enum(['PARTIAL', 'SYNCED', 'FAILED']),
+      sourceSnapshots: z.record(z.string().uuid(), z.unknown()).nullable().optional(),
+      checkpoint: z.record(z.string(), z.unknown()).nullable().optional(),
+      summary: z.string().trim().min(1).max(4000),
+      errors: z.record(z.string(), z.unknown()).nullable().optional(),
+    }).strict(),
+    annotations: { destructiveHint: false, openWorldHint: false },
+  }, safely((input: SubmitSourceAnalysisInput) => workspace.submitSourceAnalysis(input)));
 
   server.registerTool('get_project_context', {
     title: '读取项目上下文',
@@ -503,6 +526,8 @@ export function registerMcpRoutes(app: FastifyInstance, workspace: WorkspaceServ
     await server.connect(transport);
     reply.hijack();
     try {
+      const socket = request.raw.socket as typeof request.raw.socket & { destroySoon?: () => void };
+      if (typeof socket.destroySoon !== 'function') socket.destroySoon = () => socket.destroy();
       await transport.handleRequest(request.raw, reply.raw, request.body);
     } finally {
       await transport.close();

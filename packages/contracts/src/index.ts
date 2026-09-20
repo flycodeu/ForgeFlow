@@ -189,6 +189,16 @@ export type RequestSourceAnalysisInput = {
   prompt?: string | null;
 };
 
+export type SubmitSourceAnalysisInput = {
+  projectId: string;
+  analysisId: string;
+  status: 'PARTIAL' | 'SYNCED' | 'FAILED';
+  sourceSnapshots?: Record<string, unknown> | null;
+  checkpoint?: Record<string, unknown> | null;
+  summary: string;
+  errors?: Record<string, unknown> | null;
+};
+
 export type ResolveProjectSourcesInput = {
   projectId?: string;
   projectCode?: string;

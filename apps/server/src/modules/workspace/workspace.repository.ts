@@ -72,6 +72,11 @@ export class WorkspaceRepository {
       .where(and(eq(sourceAnalyses.projectId, projectId), eq(sourceAnalyses.id, analysisId))).get();
   }
 
+  updateSourceAnalysis(projectId: string, analysisId: string, values: Partial<typeof sourceAnalyses.$inferInsert>) {
+    return this.connection.db.update(sourceAnalyses).set(values)
+      .where(and(eq(sourceAnalyses.projectId, projectId), eq(sourceAnalyses.id, analysisId))).run().changes;
+  }
+
   insertModule(module: typeof modules.$inferInsert) {
     this.connection.db.insert(modules).values(module).run();
   }
@@ -404,5 +409,112 @@ export class WorkspaceRepository {
   pointToApprovedRevision(specId: string, revisionId: string) {
     return this.connection.db.update(specifications).set({ approvedRevisionId: revisionId })
       .where(eq(specifications.id, specId)).run().changes;
+  }
+
+  deleteProject(projectId: string) {
+    return this.transaction(() => {
+      const sqlite = this.connection.sqlite;
+      sqlite.pragma('foreign_keys = OFF');
+      try {
+        sqlite.prepare('DELETE FROM rd_trace_link WHERE project_id = ?').run(projectId);
+        sqlite.prepare('DELETE FROM rd_ai_run WHERE project_id = ?').run(projectId);
+        sqlite.prepare('DELETE FROM rd_task_authorization WHERE project_id = ?').run(projectId);
+        sqlite.prepare('DELETE FROM rd_task WHERE project_id = ?').run(projectId);
+        sqlite.prepare(`
+          DELETE FROM rd_engineering_asset_revision
+          WHERE asset_id IN (SELECT id FROM rd_engineering_asset WHERE project_id = ?)
+        `).run(projectId);
+        sqlite.prepare('DELETE FROM rd_engineering_asset WHERE project_id = ?').run(projectId);
+        sqlite.prepare('DELETE FROM rd_design_review WHERE project_id = ?').run(projectId);
+        sqlite.prepare(`
+          DELETE FROM rd_spec_revision
+          WHERE spec_id IN (SELECT id FROM rd_spec WHERE project_id = ?)
+        `).run(projectId);
+        sqlite.prepare('DELETE FROM rd_spec WHERE project_id = ?').run(projectId);
+        sqlite.prepare('DELETE FROM rd_capability WHERE project_id = ?').run(projectId);
+        sqlite.prepare('DELETE FROM rd_feature WHERE project_id = ?').run(projectId);
+        sqlite.prepare('DELETE FROM rd_module WHERE project_id = ?').run(projectId);
+        sqlite.prepare('DELETE FROM rd_source_analysis WHERE project_id = ?').run(projectId);
+        sqlite.prepare('DELETE FROM rd_project_source WHERE project_id = ?').run(projectId);
+        const res = sqlite.prepare('DELETE FROM rd_project WHERE id = ?').run(projectId);
+        return res.changes;
+      } finally {
+        sqlite.pragma('foreign_keys = ON');
+      }
+    });
+  }
+
+  deleteModule(projectId: string, moduleId: string) {
+    return this.transaction(() => {
+      const sqlite = this.connection.sqlite;
+      sqlite.pragma('foreign_keys = OFF');
+      try {
+        const featureIds = (sqlite.prepare('SELECT id FROM rd_feature WHERE project_id = ? AND module_id = ?').all(projectId, moduleId) as Array<{ id: string }>).map((row) => row.id);
+        for (const featureId of featureIds) {
+          sqlite.prepare('DELETE FROM rd_trace_link WHERE project_id = ? AND (source_id = ? OR target_id = ?)').run(projectId, featureId, featureId);
+          sqlite.prepare('DELETE FROM rd_ai_run WHERE feature_id = ?').run(featureId);
+          sqlite.prepare('DELETE FROM rd_task_authorization WHERE feature_id = ?').run(featureId);
+          sqlite.prepare('DELETE FROM rd_task WHERE feature_id = ?').run(featureId);
+          sqlite.prepare(`
+            DELETE FROM rd_engineering_asset_revision
+            WHERE asset_id IN (SELECT id FROM rd_engineering_asset WHERE feature_id = ?)
+          `).run(featureId);
+          sqlite.prepare('DELETE FROM rd_engineering_asset WHERE feature_id = ?').run(featureId);
+          sqlite.prepare(`
+            DELETE FROM rd_spec_revision
+            WHERE spec_id IN (SELECT id FROM rd_spec WHERE feature_id = ?)
+          `).run(featureId);
+          sqlite.prepare('DELETE FROM rd_spec WHERE feature_id = ?').run(featureId);
+          sqlite.prepare('DELETE FROM rd_capability WHERE feature_id = ?').run(featureId);
+          sqlite.prepare('DELETE FROM rd_feature WHERE id = ?').run(featureId);
+        }
+        const res = sqlite.prepare('DELETE FROM rd_module WHERE project_id = ? AND id = ?').run(projectId, moduleId);
+        return res.changes;
+      } finally {
+        sqlite.pragma('foreign_keys = ON');
+      }
+    });
+  }
+
+  deleteFeature(projectId: string, featureId: string) {
+    return this.transaction(() => {
+      const sqlite = this.connection.sqlite;
+      sqlite.pragma('foreign_keys = OFF');
+      try {
+        sqlite.prepare('DELETE FROM rd_trace_link WHERE project_id = ? AND (source_id = ? OR target_id = ?)').run(projectId, featureId, featureId);
+        sqlite.prepare('DELETE FROM rd_ai_run WHERE feature_id = ?').run(featureId);
+        sqlite.prepare('DELETE FROM rd_task_authorization WHERE feature_id = ?').run(featureId);
+        sqlite.prepare('DELETE FROM rd_task WHERE feature_id = ?').run(featureId);
+        sqlite.prepare(`
+          DELETE FROM rd_engineering_asset_revision
+          WHERE asset_id IN (SELECT id FROM rd_engineering_asset WHERE feature_id = ?)
+        `).run(featureId);
+        sqlite.prepare('DELETE FROM rd_engineering_asset WHERE feature_id = ?').run(featureId);
+        sqlite.prepare(`
+          DELETE FROM rd_spec_revision
+          WHERE spec_id IN (SELECT id FROM rd_spec WHERE feature_id = ?)
+        `).run(featureId);
+        sqlite.prepare('DELETE FROM rd_spec WHERE feature_id = ?').run(featureId);
+        sqlite.prepare('DELETE FROM rd_capability WHERE feature_id = ?').run(featureId);
+        const res = sqlite.prepare('DELETE FROM rd_feature WHERE project_id = ? AND id = ?').run(projectId, featureId);
+        return res.changes;
+      } finally {
+        sqlite.pragma('foreign_keys = ON');
+      }
+    });
+  }
+
+  deleteProjectSource(projectId: string, sourceId: string) {
+    return this.transaction(() => {
+      const sqlite = this.connection.sqlite;
+      sqlite.pragma('foreign_keys = OFF');
+      try {
+        sqlite.prepare('DELETE FROM rd_source_analysis WHERE project_id = ? AND requested_source_ids_json LIKE ?').run(projectId, `%${sourceId}%`);
+        const res = sqlite.prepare('DELETE FROM rd_project_source WHERE project_id = ? AND id = ?').run(projectId, sourceId);
+        return res.changes;
+      } finally {
+        sqlite.pragma('foreign_keys = ON');
+      }
+    });
   }
 }

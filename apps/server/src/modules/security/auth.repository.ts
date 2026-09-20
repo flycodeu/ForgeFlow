@@ -61,4 +61,8 @@ export class AuthRepository {
     this.connection.db.update(aiTokens).set({ revokedAt: at })
       .where(and(eq(aiTokens.id, id), isNull(aiTokens.revokedAt))).run();
   }
+
+  deleteToken(id: string) {
+    return this.connection.db.delete(aiTokens).where(eq(aiTokens.id, id)).run().changes;
+  }
 }

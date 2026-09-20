@@ -25,7 +25,7 @@ async function loadLifecycle() {
 }
 
 function statusLabel(status: ProjectLifecycleStage['status']) {
-  return { NOT_STARTED: '未开始', IN_PROGRESS: '进行中', FORMED: '已形成', ISSUE: '存在问题' }[status];
+  return { NOT_STARTED: '未开始', IN_PROGRESS: '进行中', FORMED: '已完成', ISSUE: '需调整' }[status];
 }
 
 onMounted(loadLifecycle);
@@ -35,13 +35,16 @@ watch(() => [props.projectId, props.refreshKey], loadLifecycle);
 <template>
   <section class="lifecycle" aria-label="项目研发流程">
     <header>
-      <div>
-        <strong>研发流程</strong>
-        <span>状态由调研、设计、能力项、实施任务与 AI执行的真实数据推导</span>
+      <div class="lifecycle-title">
+        <span class="lifecycle-icon">⚡</span>
+        <strong>研发交付流程</strong>
       </div>
-      <small v-if="lifecycle">当前：{{ lifecycle.stages.find(stage => stage.key === lifecycle?.currentStage)?.label }}</small>
+      <div v-if="lifecycle" class="current-stage-badge">
+        <span class="stage-pulse"></span>
+        当前阶段：{{ lifecycle.stages.find(stage => stage.key === lifecycle?.currentStage)?.label }}
+      </div>
     </header>
-    <div v-if="loading" class="lifecycle-loading">正在汇总项目状态…</div>
+    <div v-if="loading" class="lifecycle-loading">正在读取项目研发状态…</div>
     <div v-else-if="failed" class="lifecycle-loading issue">暂时无法读取研发流程</div>
     <div v-else-if="lifecycle" class="lifecycle-steps">
       <button
@@ -52,7 +55,7 @@ watch(() => [props.projectId, props.refreshKey], loadLifecycle);
         :aria-current="stage.key === lifecycle.currentStage ? 'step' : undefined"
         @click="emit('navigate', stage.target)"
       >
-        <span class="step-track"><i></i></span>
+        <span class="step-track"><i class="node-dot"></i></span>
         <strong>{{ stage.label }}</strong>
         <small>{{ stage.summary }}</small>
         <em>{{ statusLabel(stage.status) }}</em>
@@ -62,29 +65,185 @@ watch(() => [props.projectId, props.refreshKey], loadLifecycle);
 </template>
 
 <style scoped>
-.lifecycle { margin: 0 0 18px; padding: 16px 18px 14px; border: 1px solid #d9e2e8; background: #fff; box-shadow: 0 8px 24px rgba(24, 45, 58, .05); }
-.lifecycle header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 14px; }
-.lifecycle header div { display: flex; align-items: baseline; gap: 12px; }
-.lifecycle header strong { color: #12242e; font-size: 15px; }
-.lifecycle header span, .lifecycle header small { color: #61717a; font-size: 13px; }
-.lifecycle-steps { display: grid; grid-template-columns: repeat(8, minmax(92px, 1fr)); overflow-x: auto; padding: 0 2px 2px; }
-.lifecycle-step { position: relative; min-width: 92px; padding: 20px 10px 8px; border: 0; background: transparent; color: #42545e; text-align: left; cursor: pointer; }
-.step-track { position: absolute; top: 6px; right: 0; left: 0; height: 2px; background: #dce4e8; }
-.step-track i { position: absolute; top: -5px; left: 4px; width: 12px; height: 12px; border: 3px solid #fff; border-radius: 50%; background: #bec9cf; box-shadow: 0 0 0 1px #b9c6cc; }
-.lifecycle-step:first-child .step-track { left: 4px; }
-.lifecycle-step:last-child .step-track { right: calc(100% - 10px); }
-.lifecycle-step.formed .step-track, .lifecycle-step.in_progress .step-track, .lifecycle-step.traversed .step-track { background: #187b67; }
-.lifecycle-step.formed .step-track i { background: #187b67; box-shadow: 0 0 0 1px #187b67; }
-.lifecycle-step.in_progress .step-track i, .lifecycle-step.current .step-track i { width: 15px; height: 15px; top: -6px; left: 2px; background: #f0a23a; box-shadow: 0 0 0 2px rgba(240, 162, 58, .25); }
-.lifecycle-step.issue .step-track i { background: #bd4b55; box-shadow: 0 0 0 1px #bd4b55; }
-.lifecycle-step strong { display: block; font-size: 14px; color: #1b303b; white-space: nowrap; }
-.lifecycle-step small { display: block; min-height: 36px; margin-top: 4px; color: #677982; font-size: 12.5px; line-height: 1.4; }
-.lifecycle-step em { display: inline-block; margin-top: 5px; padding: 2px 7px; background: #eef3f4; color: #53666f; font-size: 12px; font-style: normal; }
-.lifecycle-step.current { background: #f6faf9; }
-.lifecycle-step.current strong { color: #116b5a; }
-.lifecycle-step.current em { background: #e3f1ed; color: #116b5a; font-weight: 700; }
-.lifecycle-step.issue em { background: #fae9eb; color: #a73945; }
-.lifecycle-loading { padding: 12px; background: #f4f7f8; color: #657780; font-size: 14px; }
-.lifecycle-loading.issue { color: #a73945; }
-@media (max-width: 980px) { .lifecycle-steps { grid-template-columns: repeat(8, minmax(120px, 1fr)); } .lifecycle header span { display: none; } }
+.lifecycle {
+  margin: 0 0 20px;
+  padding: 18px 22px 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+.lifecycle header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.lifecycle-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lifecycle-icon {
+  font-size: 14px;
+}
+.lifecycle-title strong {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.current-stage-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 9999px;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 600;
+}
+.stage-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
+  animation: pulseDot 1.8s infinite;
+}
+@keyframes pulseDot {
+  0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.5); }
+  70% { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+}
+.lifecycle-steps {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(92px, 1fr));
+  overflow-x: auto;
+  padding: 0 2px 4px;
+  gap: 6px;
+}
+.lifecycle-step {
+  position: relative;
+  min-width: 92px;
+  padding: 22px 10px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #475569;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.lifecycle-step:hover {
+  background: #f8fafc;
+}
+.step-track {
+  position: absolute;
+  top: 7px;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: #e2e8f0;
+}
+.step-track .node-dot {
+  position: absolute;
+  top: -5px;
+  left: 8px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  background: #cbd5e1;
+  box-shadow: 0 0 0 1px #94a3b8;
+  transition: all 0.2s;
+}
+.lifecycle-step:first-child .step-track {
+  left: 8px;
+}
+.lifecycle-step:last-child .step-track {
+  right: calc(100% - 14px);
+}
+.lifecycle-step.formed .step-track,
+.lifecycle-step.in_progress .step-track,
+.lifecycle-step.traversed .step-track {
+  background: #2563eb;
+}
+.lifecycle-step.formed .step-track .node-dot {
+  background: #2563eb;
+  box-shadow: 0 0 0 1px #2563eb;
+}
+.lifecycle-step.in_progress .step-track .node-dot,
+.lifecycle-step.current .step-track .node-dot {
+  width: 14px;
+  height: 14px;
+  top: -6px;
+  left: 7px;
+  background: #2563eb;
+  border-color: #ffffff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+}
+.lifecycle-step.issue .step-track .node-dot {
+  background: #f43f5e;
+  box-shadow: 0 0 0 1px #f43f5e;
+}
+.lifecycle-step strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #0f172a;
+  white-space: nowrap;
+}
+.lifecycle-step small {
+  display: block;
+  min-height: 34px;
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.lifecycle-step em {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 7px;
+  background: #f1f5f9;
+  border-radius: 4px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  font-style: normal;
+}
+.lifecycle-step.current {
+  background: #eff6ff;
+}
+.lifecycle-step.current strong {
+  color: #1d4ed8;
+}
+.lifecycle-step.current em {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.lifecycle-step.issue em {
+  background: #ffe4e6;
+  color: #e11d48;
+}
+.lifecycle-loading {
+  padding: 14px;
+  background: #f8fafc;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 13.5px;
+  text-align: center;
+}
+.lifecycle-loading.issue {
+  color: #e11d48;
+}
+@media (max-width: 980px) {
+  .lifecycle-steps {
+    grid-template-columns: repeat(8, minmax(110px, 1fr));
+  }
+}
 </style>

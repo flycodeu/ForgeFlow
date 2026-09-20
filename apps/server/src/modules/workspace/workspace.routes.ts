@@ -277,6 +277,11 @@ export function registerWorkspaceRoutes(app: FastifyInstance, service: Workspace
     return service.getProject(request.params.projectId);
   });
 
+  app.delete<{ Params: ProjectParams }>('/api/projects/:projectId', async (request) => {
+    await auth.require(request, 'owner', true);
+    return service.deleteProject(request.params.projectId);
+  });
+
   app.get<{ Params: ProjectParams }>('/api/projects/:projectId/sources', async (request) => {
     await auth.require(request, 'project:read', true);
     return service.listProjectSources(request.params.projectId);
@@ -290,6 +295,11 @@ export function registerWorkspaceRoutes(app: FastifyInstance, service: Workspace
   app.patch<{ Params: SourceParams }>('/api/projects/:projectId/sources/:sourceId', async (request) => {
     await auth.require(request, 'planning:write', true);
     return service.upsertProjectSource(projectSourceInput(bodyObject(request.body), request.params.projectId, request.params.sourceId));
+  });
+
+  app.delete<{ Params: SourceParams }>('/api/projects/:projectId/sources/:sourceId', async (request) => {
+    await auth.require(request, 'planning:write', true);
+    return service.deleteProjectSource(request.params.projectId, request.params.sourceId);
   });
 
   app.get<{ Params: ProjectParams }>('/api/projects/:projectId/source-analyses', async (request) => {
@@ -345,6 +355,11 @@ export function registerWorkspaceRoutes(app: FastifyInstance, service: Workspace
     });
   });
 
+  app.delete<{ Params: ModuleParams }>('/api/projects/:projectId/modules/:moduleId', async (request) => {
+    await auth.require(request, 'spec:write', true);
+    return service.deleteModule(request.params.projectId, request.params.moduleId);
+  });
+
   app.get<{ Params: ProjectParams; Querystring: { moduleId?: string } }>('/api/projects/:projectId/features', async (request) => {
     await auth.require(request, 'project:read', true);
     return service.listFeatures(request.params.projectId, request.query.moduleId);
@@ -385,6 +400,11 @@ export function registerWorkspaceRoutes(app: FastifyInstance, service: Workspace
       status: statusField(body, false),
       sortOrder: sortOrderField(body, false),
     });
+  });
+
+  app.delete<{ Params: FeatureParams }>('/api/projects/:projectId/features/:featureId', async (request) => {
+    await auth.require(request, 'spec:write', true);
+    return service.deleteFeature(request.params.projectId, request.params.featureId);
   });
 
   app.get<{ Params: FeatureParams }>('/api/projects/:projectId/features/:featureId/capabilities', async (request) => {

@@ -13,8 +13,9 @@ type CapabilityGuidanceInput = {
 };
 
 const CORE_SECTIONS = [
-  '1. 目标', '2. 场景', '3. 输入', '4. 输出', '5. 前置条件', '6. 行为流程',
-  '7. 规则', '8. 关联能力', '9. 异常和边界', '10. 实现影响', '11. 验证条件', '12. 当前实现状态',
+  '1. 功能定义', '2. 使用者与场景', '3. 前置条件', '4. 输入与校验', '5. 输出与状态变化', '6. 正常流程',
+  '7. 业务规则', '8. 异常、边界与恢复', '9. 数据、契约与依赖', '10. 权限与安全', '11. 实现影响',
+  '12. 验收用例与证据', '13. 当前实现状态', '14. 未决事项',
 ];
 
 const PROFILE_SECTIONS: Record<ProjectProfile, { label: string; sections: string[]; keywords: RegExp }> = {
@@ -169,31 +170,47 @@ export function buildCapabilityDesignGuidance(input: CapabilityGuidanceInput): C
     adaptiveSections: PROFILE_SECTIONS[profile].sections,
     markdownTemplate: `# ${input.capabilityCode} ${input.capabilityName}
 
-> ${PROFILE_SECTIONS[profile].label} Capability Design｜Core Sections + Adaptive Sections
+> ${PROFILE_SECTIONS[profile].label} 能力详细设计｜固定研发过程 + 技术栈自适应章节
 
-## 1. 目标
+## 1. 功能定义
 
 ${input.capabilitySummary || '说明这个 Capability 完成后可观察到的结果。'}
 
-## 2. 场景
+用一句完整的话明确触发条件、系统行为和可观察结果；这句话会显示在能力详情，不放在左侧导航。
 
-## 3. 输入
+## 2. 使用者与场景
 
-## 4. 输出
+说明谁在什么场景使用，以及谁可以查看、触发或修改。
 
-## 5. 前置条件
+## 3. 前置条件
 
-## 6. 行为流程
+## 4. 输入与校验
+
+写明字段、类型、是否必填、长度或格式，以及无效输入如何反馈。
+
+## 5. 输出与状态变化
+
+说明返回结果、持久化变化、事件、界面反馈及必须保持不变的字段。
+
+## 6. 正常流程
 
 1. 写出 AI 可以直接据此编码的处理顺序。
 
-## 7. 规则
+## 7. 业务规则
 
-## 8. 关联能力
+## 8. 异常、边界与恢复
 
-## 9. 异常和边界
+至少检查空值、重复操作、目标不存在、并发或依赖失败；不适用项说明原因。
 
-## 10. 实现影响
+## 9. 数据、契约与依赖
+
+写清读取和修改的对象、字段、接口、函数、命令、事件或上下游，并说明兼容要求。
+
+## 10. 权限与安全
+
+说明真实的权限检查、敏感数据和越权结果；无账号系统时说明本地或运行环境边界。
+
+## 11. 实现影响
 
 | Artifact Type | Artifact | Impact | Reason |
 | --- | --- | --- | --- |
@@ -205,20 +222,29 @@ ${evidence(input)}
 
 ${adaptiveTemplate(profile)}
 
-## 11. 验证条件
+## 12. 验收用例与证据
+
+| 编号 | 前置条件 | 输入与操作 | 预期结果 | 所需证据 |
+| --- | --- | --- | --- | --- |
+| AC-01 | 待填写 | 待填写 | 待填写 | 自动化测试 / 页面操作 / 日志 / 指标 |
 
 - [ ] 正常路径可复现
 - [ ] 关键失败路径符合恢复策略
 - [ ] 实现结果可对应到代码与真实测试
 
-## 12. 当前实现状态
+## 13. 当前实现状态
 
 设计：DRAFT
 实现：NOT_STARTED
 测试：NOT_RUN
+
+## 14. 未决事项
+
+记录尚未确认的规则、负责人、确认时点，以及后续变更必须同步检查的对象。
 `,
     guardrails: [
-      'Capability 设计必须足够指导下一步编码，不能只写一句实现目标。',
+      'Capability 设计必须保留一眼可读的功能定义，同时提供足够指导下一步编码的完整细节。',
+      '异常、数据契约、实现影响和验收证据是固定闭环；不适用时要说明原因，不能静默省略。',
       '技术章节由 designProfile、项目上下文和 Capability 语义共同决定，designProfile 不是内容限制。',
       '不得为无 HTTP、无数据库或无 UI 项目虚构 Controller、REST API、数据库表或页面。',
       '字段、API、实体和 Artifact 继续保存在版本化正文及约定表格中。',

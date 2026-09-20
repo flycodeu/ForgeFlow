@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type {
   AiRun, AuthorizationStatus, Capability, CapabilityDesignGuidance, CapabilityDetail, CapabilityStatus, DesignReview, DesignReviewStatus, EngineeringAsset, EngineeringAssetRevision, EngineeringBlueprintPlan, Feature, FeatureDesignGuidance, FeatureEngineeringBlueprint, FeatureStatus, Module, Project, ProjectDetail, ProjectLifecycle, RunActorType, RunChangedFile, RunDesignSnapshot, RunPhase, RunReportedStatus, RunSourceExecution, RunVerificationOrigin,
-  ProjectSource, ProjectSourceLocation, ProjectSourceScope, RequestSourceAnalysisInput, ResolvedProjectSources, ResolveProjectSourcesInput,
+  ProjectSource, ProjectSourceLocation, ProjectSourceScope, RequestSourceAnalysisInput, ResolvedProjectSources, ResolveProjectSourcesInput, SubmitSourceAnalysisInput,
   RunStatus, RunVerificationSummary, SourceAnalysis, SourceAnalysisTargetScope, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary,
   SpecificationSummary, Task, TaskAuthorization, TaskCategory, TaskStatus, TaskType, TraceLink, UpsertProjectSourceInput, WorkflowMode,
 } from '@forgeflow/contracts';
@@ -135,9 +135,9 @@ function projectSourceView(source: {
   };
 }
 
-function analysisPrompt(analysisId: string, environmentKey: string, sources: ProjectSource[], client: 'Codex' | 'Claude Code') {
+function analysisPrompt(analysisId: string, projectId: string, environmentKey: string, sources: ProjectSource[], client: 'Codex' | 'Claude Code') {
   const sourceList = sources.map((source) => `- ${source.alias}: ${source.locations.find((item) => item.environmentKey === environmentKey)?.localRoot ?? '未登记位置'}`).join('\n');
-  return `使用 ForgeFlow MCP 读取 analysisId ${analysisId}，确认当前环境 ${environmentKey} 能够访问哪些 Source。\n\n${sourceList}\n\n本轮只读取代码和工程结构，不要修改业务源码。先读取 README、依赖配置、构建配置、主要源码目录、启动入口、测试目录、迁移与配置样例；严格遵守每个 Source 的 include/exclude，不得越过登记范围。当前 ForgeFlow 尚未提供 submit_source_analysis，请完成本地只读检查后停下并保留结果，不要假装已经写回发现。客户端：${client}。`;
+  return `使用 ForgeFlow MCP 对 projectId ${projectId} 的 analysisId ${analysisId} 执行只读源码分析，确认当前环境 ${environmentKey} 能够访问哪些 Source。\n\n${sourceList}\n\n先调用 claim_source_analysis，再读取 README、依赖配置、构建配置、主要源码目录、启动入口、测试目录、迁移与配置样例；严格遵守每个 Source 的 include/exclude，不得越过登记范围。完成后调用 submit_source_analysis 写回源码快照、代码引用、摘要与错误；不要修改业务源码。客户端：${client}。`;
 }
 
 function sourceAnalysisView(analysis: {
@@ -156,9 +156,9 @@ function sourceAnalysisView(analysis: {
     errors: parseJson<Record<string, unknown> | null>(analysis.errorsJson, null),
     requestedAt: analysis.requestedAt.toISOString(), startedAt: analysis.startedAt?.toISOString() ?? null,
     completedAt: analysis.completedAt?.toISOString() ?? null, updatedAt: analysis.updatedAt.toISOString(), sources,
-    recommendedFlow: ['确认当前环境可访问的 Source', '先检查目录结构与工程入口', '按目标功能读取必要代码', '等待后续分析提交接口'],
+    recommendedFlow: ['领取分析请求', '确认当前环境可访问的 Source', '按范围读取工程结构与必要代码', '提交源码快照、引用与分析结论'],
     exclusions: DEFAULT_SOURCE_EXCLUDES,
-    prompts: { codex: analysisPrompt(analysis.id, analysis.environmentKey, sources, 'Codex'), claude: analysisPrompt(analysis.id, analysis.environmentKey, sources, 'Claude Code') },
+    prompts: { codex: analysisPrompt(analysis.id, analysis.projectId, analysis.environmentKey, sources, 'Codex'), claude: analysisPrompt(analysis.id, analysis.projectId, analysis.environmentKey, sources, 'Claude Code') },
   };
 }
 
@@ -391,7 +391,7 @@ export class WorkspaceService {
   createProject(input: { projectKey: string; name: string; description?: string; projectType?: string; workflowMode?: WorkflowMode; designProfile?: string }): Project {
     const project = { id: randomUUID(), projectKey: input.projectKey, name: input.name,
       description: input.description ?? '', projectType: input.projectType?.trim() || 'GENERAL',
-      workflowMode: input.workflowMode ?? 'AUTO', designProfile: input.designProfile?.trim().toLowerCase() || 'generic', createdAt: new Date() };
+      workflowMode: input.workflowMode ?? 'CONTROLLED', designProfile: input.designProfile?.trim().toLowerCase() || 'generic', createdAt: new Date() };
     try {
       this.repository.insertProject(project);
     } catch (error) {
@@ -585,6 +585,71 @@ export class WorkspaceService {
       }
     });
     return sourceAnalysisView(analysis, this.listProjectSources(input.projectId));
+  }
+
+  claimSourceAnalysis(projectId: string, analysisId: string): SourceAnalysis {
+    const analysis = this.repository.findSourceAnalysis(projectId, analysisId);
+    if (!analysis) throw new ApiError(404, 'SOURCE_ANALYSIS_NOT_FOUND', '源码分析请求不存在');
+    if (analysis.status !== 'WAITING_AI') {
+      throw new ApiError(409, 'SOURCE_ANALYSIS_NOT_WAITING', '源码分析请求当前不可领取', { status: analysis.status });
+    }
+    const now = new Date();
+    const requestedSourceIds = parseJson<string[]>(analysis.requestedSourceIdsJson, []);
+    this.repository.transaction(() => {
+      this.repository.updateSourceAnalysis(projectId, analysisId, { status: 'READING', startedAt: now, updatedAt: now });
+      for (const sourceId of requestedSourceIds) {
+        const source = this.repository.findProjectSource(projectId, sourceId);
+        if (!source) continue;
+        const locations = parseJson<StoredSourceLocation[]>(source.locationsJson, []).map((location) =>
+          location.environmentKey.toLowerCase() === analysis.environmentKey.toLowerCase()
+            ? { ...location, analysisStatus: 'READING' as const }
+            : location);
+        this.repository.updateProjectSource(projectId, sourceId, { locationsJson: JSON.stringify(locations), updatedAt: now });
+      }
+    });
+    return sourceAnalysisView(this.repository.findSourceAnalysis(projectId, analysisId)!, this.listProjectSources(projectId));
+  }
+
+  submitSourceAnalysis(input: SubmitSourceAnalysisInput): SourceAnalysis {
+    const analysis = this.repository.findSourceAnalysis(input.projectId, input.analysisId);
+    if (!analysis) throw new ApiError(404, 'SOURCE_ANALYSIS_NOT_FOUND', '源码分析请求不存在');
+    if (!['READING', 'PARTIAL'].includes(analysis.status)) {
+      throw new ApiError(409, 'SOURCE_ANALYSIS_NOT_ACTIVE', '源码分析请求尚未领取或已经结束', { status: analysis.status });
+    }
+    const summary = input.summary.trim();
+    if (!summary || summary.length > 4000) throw new ApiError(400, 'INVALID_ANALYSIS_SUMMARY', '分析摘要须为 1–4000 个字符');
+    const requestedSourceIds = parseJson<string[]>(analysis.requestedSourceIdsJson, []);
+    const snapshots = input.sourceSnapshots ?? null;
+    if (snapshots && Object.keys(snapshots).some((sourceId) => !requestedSourceIds.includes(sourceId))) {
+      throw new ApiError(400, 'SOURCE_SNAPSHOT_OUT_OF_SCOPE', '源码快照包含未在本次请求中的 Source');
+    }
+    const serialized = JSON.stringify({ snapshots, checkpoint: input.checkpoint ?? null, errors: input.errors ?? null });
+    if (serialized.length > 500_000) throw new ApiError(413, 'SOURCE_ANALYSIS_TOO_LARGE', '源码分析结果超过 500 KB');
+    if (input.status === 'SYNCED' && (!snapshots || Object.keys(snapshots).length === 0)) {
+      throw new ApiError(400, 'SOURCE_SNAPSHOT_REQUIRED', '完成同步时必须提交至少一个源码快照');
+    }
+    const now = new Date();
+    this.repository.transaction(() => {
+      this.repository.updateSourceAnalysis(input.projectId, input.analysisId, {
+        status: input.status,
+        sourceSnapshotsJson: snapshots ? JSON.stringify(snapshots) : null,
+        checkpointJson: input.checkpoint ? JSON.stringify(input.checkpoint) : null,
+        summary,
+        errorsJson: input.errors ? JSON.stringify(input.errors) : null,
+        completedAt: now,
+        updatedAt: now,
+      });
+      for (const sourceId of requestedSourceIds) {
+        const source = this.repository.findProjectSource(input.projectId, sourceId);
+        if (!source) continue;
+        const locations = parseJson<StoredSourceLocation[]>(source.locationsJson, []).map((location) =>
+          location.environmentKey.toLowerCase() === analysis.environmentKey.toLowerCase()
+            ? { ...location, analysisStatus: input.status }
+            : location);
+        this.repository.updateProjectSource(input.projectId, sourceId, { locationsJson: JSON.stringify(locations), updatedAt: now });
+      }
+    });
+    return sourceAnalysisView(this.repository.findSourceAnalysis(input.projectId, input.analysisId)!, this.listProjectSources(input.projectId));
   }
 
   listProjectsForMcp() {
@@ -1963,5 +2028,33 @@ export class WorkspaceService {
     const run = this.repository.findRun(projectId, runId);
     if (!run) throw new ApiError(404, 'RUN_NOT_FOUND', 'Run 不存在');
     return run;
+  }
+
+  deleteProject(projectId: string) {
+    const project = this.repository.findProject(projectId);
+    if (!project) throw new ApiError(404, 'PROJECT_NOT_FOUND', '项目不存在');
+    this.repository.deleteProject(projectId);
+    return { ok: true, id: projectId };
+  }
+
+  deleteModule(projectId: string, moduleId: string) {
+    const module = this.repository.findModule(projectId, moduleId);
+    if (!module) throw new ApiError(404, 'MODULE_NOT_FOUND', '模块不存在');
+    this.repository.deleteModule(projectId, moduleId);
+    return { ok: true, id: moduleId };
+  }
+
+  deleteFeature(projectId: string, featureId: string) {
+    const feature = this.repository.findFeature(projectId, featureId);
+    if (!feature) throw new ApiError(404, 'FEATURE_NOT_FOUND', '功能不存在');
+    this.repository.deleteFeature(projectId, featureId);
+    return { ok: true, id: featureId };
+  }
+
+  deleteProjectSource(projectId: string, sourceId: string) {
+    const source = this.repository.findProjectSource(projectId, sourceId);
+    if (!source) throw new ApiError(404, 'SOURCE_NOT_FOUND', '源码位置不存在');
+    this.repository.deleteProjectSource(projectId, sourceId);
+    return { ok: true, id: sourceId };
   }
 }

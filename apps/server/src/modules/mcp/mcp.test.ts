@@ -79,7 +79,7 @@ test('MCP exposes scoped context tools and reuses the authorized Run state machi
   assert.deepEqual(toolNames.sort(), [
     'create_capability', 'create_capability_design', 'create_feature', 'create_feature_design', 'create_module', 'create_project_draft',
     'create_project_spec', 'create_spec_revision', 'create_task_plan', 'create_engineering_asset', 'create_engineering_asset_revision', 'create_trace_link',
-    'resolve_project_and_sources', 'upsert_project_source', 'request_source_analysis',
+    'resolve_project_and_sources', 'upsert_project_source', 'request_source_analysis', 'claim_source_analysis', 'submit_source_analysis',
     'get_capability_context', 'get_capability_design_guidance', 'get_current_authorized_task', 'get_engineering_asset', 'get_engineering_asset_history', 'get_engineering_blueprint', 'get_feature_context', 'get_feature_delivery_context', 'get_feature_design_guidance', 'get_project_context', 'list_projects',
     'get_pending_reviews', 'get_project_planning_context', 'submit_design_review',
     'plan_engineering_blueprint', 'report_run_failure', 'start_run', 'submit_run_result', 'update_run_phase',
@@ -101,7 +101,7 @@ test('MCP exposes scoped context tools and reuses the authorized Run state machi
   const guidance = resultText<{ coreSections: string[]; markdownTemplate: string; guardrails: string[] }>(
     await call(token.token, 'get_feature_design_guidance', { featureId: feature.id }),
   );
-  assert.ok(guidance.coreSections.includes('2. 设计依据'));
+  assert.ok(guidance.coreSections.includes('2. 设计依据与已确认决策'));
   assert.match(guidance.markdownTemplate, /## CAP-01 核心能力/);
   assert.ok(guidance.guardrails.some((item) => item.includes('不得虚构')));
   const planner = await rest<CreatedAiToken>('POST', '/api/ai-tokens', {

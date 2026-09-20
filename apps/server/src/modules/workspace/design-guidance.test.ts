@@ -24,6 +24,9 @@ test('adaptive design guidance keeps one process while selecting project-specifi
   assert.match(web.markdownTemplate, /Research REV 3/);
   assert.match(web.markdownTemplate, /Architecture REV 5/);
   assert.match(web.markdownTemplate, /Artifact Type \| Artifact \| Impact \| Reason/);
+  assert.match(web.markdownTemplate, /# 8\. 数据、状态与兼容性/);
+  assert.match(web.markdownTemplate, /# 12\. 验收用例与证据/);
+  assert.match(web.markdownTemplate, /# 13\. 可观测性、安全与发布/);
 
   const godot = buildFeatureDesignGuidance({ ...base, projectType: 'Godot 4', featureName: '2D 背包系统',
     documents: [{ kind: 'technology', revisionNo: 1, content: '# Game Engine\nGodot 4\n# Save Data\nJSON' }] });

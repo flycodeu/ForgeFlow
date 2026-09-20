@@ -62,4 +62,16 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService) {
     await auth.require(request, 'owner', true);
     return auth.revokeToken(request.params.tokenId);
   });
+  app.post<{ Params: { tokenId: string } }>('/api/ai-tokens/:tokenId/rotate', async (request) => {
+    await auth.require(request, 'owner', true);
+    return auth.rotateToken(request.params.tokenId);
+  });
+  app.delete<{ Params: { tokenId: string } }>('/api/ai-tokens/:tokenId', async (request) => {
+    await auth.require(request, 'owner', true);
+    return auth.deleteToken(request.params.tokenId);
+  });
+  app.post<{ Params: { tokenId: string } }>('/api/ai-tokens/:tokenId/delete', async (request) => {
+    await auth.require(request, 'owner', true);
+    return auth.deleteToken(request.params.tokenId);
+  });
 }

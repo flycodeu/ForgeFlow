@@ -6,7 +6,7 @@ import test from 'node:test';
 import type { CreatedAiToken, Project, ProjectDetail, ProjectSource, ResolvedProjectSources, SourceAnalysis } from '@forgeflow/contracts';
 import { createApp } from '../../app.js';
 
-test('multi-source bindings stay project-scoped and analysis requests stop at WAITING_AI', async (t) => {
+test('multi-source bindings stay project-scoped and analysis results round-trip through MCP', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'forgeflow-source-binding-'));
   const app = createApp(join(directory, 'forgeflow.db'));
   t.after(async () => {
@@ -122,13 +122,37 @@ test('multi-source bindings stay project-scoped and analysis requests stop at WA
   assert.equal(analysis.startedAt, null);
   assert.equal(analysis.completedAt, null);
   assert.equal(analysis.sourceSnapshots, null);
-  assert.match(analysis.prompts.codex, /尚未提供 submit_source_analysis/);
+  assert.match(analysis.prompts.codex, /submit_source_analysis/);
   assert.match(analysis.prompts.claude, /不要修改业务源码/);
+
+  const claimed = success<SourceAnalysis>(await call(planner.token, 'claim_source_analysis', {
+    projectId: project.id, analysisId: analysis.id,
+  }));
+  assert.equal(claimed.status, 'READING');
+  assert.ok(claimed.startedAt);
+
+  const submitted = success<SourceAnalysis>(await call(planner.token, 'submit_source_analysis', {
+    projectId: project.id,
+    analysisId: analysis.id,
+    status: 'SYNCED',
+    sourceSnapshots: Object.fromEntries(sources.map((source) => [source.id, {
+      root: source.locations[0]!.localRoot,
+      entries: [{ path: 'README.md', kind: 'documentation' }],
+      codeReferences: [{ path: 'src/main.ts', symbol: 'main' }],
+    }])),
+    checkpoint: { filesRead: 6 },
+    summary: '已识别三个源码入口与主要代码引用。',
+    errors: null,
+  }));
+  assert.equal(submitted.status, 'SYNCED');
+  assert.equal(submitted.summary, '已识别三个源码入口与主要代码引用。');
+  assert.equal(Object.keys(submitted.sourceSnapshots ?? {}).length, 3);
+  assert.ok(submitted.completedAt);
 
   const detail = await rest<ProjectDetail>('GET', `/api/projects/${project.id}`);
   assert.equal(detail.sources.length, 3);
   assert.equal(detail.sourceAnalyses.length, 1);
-  assert.equal(detail.sourceAnalyses[0]?.status, 'WAITING_AI');
+  assert.equal(detail.sourceAnalyses[0]?.status, 'SYNCED');
   assert.deepEqual(detail.modules, []);
   assert.deepEqual(detail.features, []);
   assert.deepEqual(detail.capabilities, []);

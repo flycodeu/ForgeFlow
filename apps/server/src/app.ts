@@ -10,6 +10,7 @@ import { WorkspaceRepository } from './modules/workspace/workspace.repository.js
 import { registerWorkspaceRoutes } from './modules/workspace/workspace.routes.js';
 import { WorkspaceService } from './modules/workspace/workspace.service.js';
 import { registerMcpRoutes } from './modules/mcp/mcp.routes.js';
+import { registerSystemRoutes } from './modules/system/system.routes.js';
 
 export function createApp(databasePath?: string) {
   const connection = openDatabase(databasePath);
@@ -35,6 +36,7 @@ export function createApp(databasePath?: string) {
   registerAuthRoutes(app, auth);
   registerWorkspaceRoutes(app, workspace, auth);
   registerMcpRoutes(app, workspace, auth);
+  registerSystemRoutes(app);
 
   app.addHook('onClose', async () => {
     sqlite.close();
