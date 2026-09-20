@@ -7,6 +7,7 @@
     "node": ">=24 <25"
   },
   "scripts": {
+    "archive": "node scripts/project-archive.mjs",
     "dev": "node scripts/free-dev-ports.mjs && node scripts/run-dev.mjs",
     "dev:server": "node scripts/free-dev-ports.mjs --server && pnpm --filter @forgeflow/server dev",
     "dev:web": "node scripts/free-dev-ports.mjs --web && pnpm --filter @forgeflow/web dev",

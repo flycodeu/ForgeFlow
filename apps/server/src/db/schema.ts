@@ -1,4 +1,4 @@
-import { check, integer, sqliteTable, text, uniqueIndex, type AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
+import { check, index, integer, sqliteTable, text, uniqueIndex, type AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 export const projects = sqliteTable('rd_project', {
@@ -289,3 +289,27 @@ export const aiTokens = sqliteTable('rd_ai_token', {
   lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
   revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
 });
+
+export const workEvents = sqliteTable('rd_work_event', {
+  sequence: integer('sequence').primaryKey({ autoIncrement: true }),
+  id: text('id').notNull().unique(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'restrict' }),
+  workId: text('work_id').notNull(),
+  principalKey: text('principal_key').notNull(),
+  operationId: text('operation_id').notNull(),
+  payloadHash: text('payload_hash').notNull(),
+  type: text('type').notNull(),
+  title: text('title').notNull(),
+  content: text('content').notNull(),
+  sourceKind: text('source_kind').notNull(),
+  sourceName: text('source_name').notNull(),
+  documentRevisionIdsJson: text('document_revision_ids_json').notNull().default('[]'),
+  occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+  receivedAt: integer('received_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  uniqueIndex('rd_work_event_operation_unique').on(table.projectId, table.principalKey, table.operationId),
+  index('rd_work_event_project_sequence').on(table.projectId, table.sequence),
+  index('rd_work_event_work_sequence').on(table.projectId, table.workId, table.sequence),
+  check('rd_work_event_type_allowed', sql`${table.type} in ('PLAN', 'PROGRESS', 'DESIGN', 'RESULT', 'NOTE')`),
+  check('rd_work_event_source_allowed', sql`${table.sourceKind} in ('owner', 'local_web', 'ai_token')`),
+]);

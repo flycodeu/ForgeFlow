@@ -732,7 +732,7 @@ export class WorkspaceService {
         category: task.category, area: task.area,
         status: task.status, objective: task.objective, sortOrder: task.sortOrder,
       })),
-      planningProcess: '按 项目背景 → Research → Requirement → Architecture → Technology → Feature Design → Task Plan 顺序读取；阶段可标记 N/A，但必须在正文记录原因。',
+      planningProcess: '按当前工作需要参考已有资料与实际代码，自主选择调研、设计、实现和验证顺序。保留原有文档格式；可扩展或修正设计，并通过项目档案记录计划、变化、结果和未验证范围，不要求补齐固定章节。',
       planningBoundary: detail.project.workflowMode === 'AUTO'
         ? 'AUTO：AI 可创建 Revision、Capability、Task 并直接执行；PASS 自动完成。不得假设存在数据库、HTTP API、UI、Frontend 或 Backend。'
         : 'CONTROLLED：保留 Design Review、Approved Baseline、Authorization 和人工确认。不得假设存在数据库、HTTP API、UI、Frontend 或 Backend。',
@@ -916,7 +916,7 @@ export class WorkspaceService {
     const passedCapabilityIds = new Set(detail.tasks.filter((task) => task.capabilityId).filter((task) =>
       detail.runs.some((run) => run.taskId === task.id && run.verificationSummary?.status.toUpperCase() === 'PASS'))
       .map((task) => task.capabilityId!));
-    const engineeringCount = detail.engineeringAssets.length;
+    const engineeringCount = detail.engineeringAssets.filter((asset) => asset.kind !== 'PROJECT_DOCUMENT').length;
     const research = documentStage('research', 'research');
     const requirements = documentStage('requirements', 'requirements');
     const architecture = detail.specifications.find((item) => item.featureId === null && item.capabilityId === null && item.kind === 'architecture');
@@ -2033,6 +2033,9 @@ export class WorkspaceService {
   deleteProject(projectId: string) {
     const project = this.repository.findProject(projectId);
     if (!project) throw new ApiError(404, 'PROJECT_NOT_FOUND', '项目不存在');
+    if (this.repository.hasProjectWorkEvents(projectId)) {
+      throw new ApiError(409, 'PROJECT_HAS_WORK_RECORDS', '该项目已有保留的工作记录，当前不能永久删除；可在项目档案中导出保存');
+    }
     this.repository.deleteProject(projectId);
     return { ok: true, id: projectId };
   }

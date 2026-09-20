@@ -12,6 +12,8 @@ import { openDatabase } from './client.js';
 const preBaselineFixture = fileURLToPath(new URL('./test-fixtures/pre-baseline-v0.1.sql', import.meta.url));
 const preBaselineUpgrade = fileURLToPath(new URL('../../../../migrations/legacy/pre-baseline-upgrade.sql', import.meta.url));
 const lastPublicPreBaselineMigration = 1789790350672;
+const migrationsRoot = fileURLToPath(new URL('../../../../migrations/', import.meta.url));
+const currentMigrationCount = (JSON.parse(readFileSync(join(migrationsRoot, 'meta/_journal.json'), 'utf8')) as { entries: unknown[] }).entries.length;
 
 function temporaryDatabase() {
   const directory = mkdtempSync(join(tmpdir(), 'forgeflow-database-'));
@@ -63,9 +65,9 @@ test('empty database migrates, enforces keys, and survives a second open', (t) =
     .all() as { name: string }[];
   assert.deepEqual(tables.map((row) => row.name), [
     '__drizzle_migrations', 'rd_ai_run', 'rd_ai_token', 'rd_capability', 'rd_design_review', 'rd_engineering_asset', 'rd_engineering_asset_revision', 'rd_feature', 'rd_module', 'rd_owner', 'rd_owner_session', 'rd_project',
-    'rd_project_source', 'rd_source_analysis', 'rd_spec', 'rd_spec_revision', 'rd_task', 'rd_task_authorization', 'rd_trace_link',
+    'rd_project_source', 'rd_source_analysis', 'rd_spec', 'rd_spec_revision', 'rd_task', 'rd_task_authorization', 'rd_trace_link', 'rd_work_event', 'sqlite_sequence',
   ]);
-  assert.equal(migrationCount(first.sqlite), 1);
+  assert.equal(migrationCount(first.sqlite), currentMigrationCount);
   assert.equal(first.sqlite.pragma('foreign_keys', { simple: true }), 1);
   assert.equal(first.sqlite.pragma('journal_mode', { simple: true }), 'wal');
   assert.equal(first.sqlite.pragma('busy_timeout', { simple: true }), 5000);
@@ -115,7 +117,7 @@ test('empty database migrates, enforces keys, and survives a second open', (t) =
   first.sqlite.close();
 
   second = openDatabase(fixture.path);
-  assert.equal(migrationCount(second.sqlite), 1);
+  assert.equal(migrationCount(second.sqlite), currentMigrationCount);
   assert.equal((second.sqlite.prepare('SELECT count(*) AS count FROM rd_spec_revision').get() as { count: number }).count, 1);
   assert.equal((second.sqlite.prepare('SELECT status FROM rd_task WHERE id = ?').get('task-1') as { status: string }).status, 'RUNNING');
   assert.equal((second.sqlite.prepare('SELECT phase FROM rd_ai_run WHERE id = ?').get('run-1') as { phase: string }).phase, 'PREPARING');
@@ -135,11 +137,12 @@ test('health endpoint probes the migrated database', async (t) => {
 
 test('current pre-baseline database is registered without replaying the schema', (t) => {
   const fixture = temporaryDatabase();
-  const initial = openDatabase(fixture.path);
-  initial.sqlite.prepare('DELETE FROM __drizzle_migrations').run();
-  initial.sqlite.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)')
+  const initial = new DatabaseDriver(fixture.path);
+  applyStatements(initial, readFileSync(join(migrationsRoot, 'schema.sql'), 'utf8'));
+  initial.exec('CREATE TABLE __drizzle_migrations (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at numeric)');
+  initial.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)')
     .run('legacy-current-schema', 1789824280874);
-  initial.sqlite.close();
+  initial.close();
 
   const reopened = openDatabase(fixture.path);
   t.after(() => {
@@ -147,7 +150,7 @@ test('current pre-baseline database is registered without replaying the schema',
     fixture.cleanup();
   });
 
-  assert.equal(migrationCount(reopened.sqlite), 2);
+  assert.equal(migrationCount(reopened.sqlite), currentMigrationCount + 1);
   assert.equal((reopened.sqlite.prepare('SELECT count(*) AS count FROM rd_project').get() as { count: number }).count, 0);
 });
 
@@ -180,7 +183,7 @@ test('pre-baseline database upgrades without losing revision history', (t) => {
   legacy.close();
 
   upgraded = openDatabase(fixture.path);
-  assert.equal(migrationCount(upgraded.sqlite), 2);
+  assert.equal(migrationCount(upgraded.sqlite), currentMigrationCount + 1);
   assert.equal((upgraded.sqlite.prepare('SELECT latest_revision_id AS id FROM rd_spec WHERE id = ?').get('s1') as { id: string }).id, 'r2');
   assert.deepEqual(upgraded.sqlite.prepare('SELECT markdown, source, change_summary AS summary FROM rd_spec_revision WHERE id = ?').get('r1'), {
     markdown: '# Original', source: 'unknown', summary: '未记录（旧版）',

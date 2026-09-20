@@ -9,8 +9,14 @@ import { z } from 'zod';
 import { ApiError } from '../../shared/api-error.js';
 import type { AiTokenPrincipal, AuthService } from '../security/auth.service.js';
 import type { WorkspaceService } from '../workspace/workspace.service.js';
+import type { ArchiveService } from '../archive/archive.service.js';
 
 const TOOL_SCOPES: Record<string, AiScope[]> = {
+  list_project_archive: ['project:read', 'spec:read'],
+  get_project_document: ['project:read', 'spec:read'],
+  archive_project_document: ['spec:write'],
+  record_project_work: ['spec:write'],
+  list_project_work: ['project:read', 'spec:read'],
   list_projects: ['project:read'],
   resolve_project_and_sources: ['project:read'],
   get_project_context: ['project:read', 'spec:read', 'task:read'],
@@ -119,7 +125,7 @@ function safely<TArgs>(work: (args: TArgs) => unknown | Promise<unknown>) {
   };
 }
 
-function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiTokenPrincipal) {
+function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiTokenPrincipal, archive: ArchiveService) {
   const server = new McpServer({ name: 'forgeflow', version: '0.1.0' });
 
   server.registerTool('list_projects', {
@@ -210,7 +216,7 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
 
   server.registerTool('get_feature_design_guidance', {
     title: '生成自适应 Feature 设计指导',
-    description: '读取项目类型、背景、需求、Research、Architecture 与 Technology 后，返回 Core Sections、项目适配章节、Markdown 模板和技术无关 Task 建议。创建 Feature Design 前必须调用。',
+    description: '返回可选的项目适配章节、Markdown 模板和任务建议；不要求调用此工具或遵循模板，可保留原有文档并自主扩展设计。',
     inputSchema: z.object({ featureId: z.string().uuid() }).strict(),
     annotations: { readOnlyHint: true },
   }, safely(({ featureId }: { featureId: string }) => workspace.getFeatureDesignGuidance(featureId)));
@@ -271,7 +277,7 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
 
   server.registerTool('get_project_planning_context', {
     title: '读取项目规划上下文',
-    description: '规划写入前必须调用。返回项目类型、背景、Research、需求、架构、技术选型、Module、Feature 设计摘要和 Task 摘要；不得预设 Web 分层。',
+    description: '按需读取项目背景、资料、功能和任务摘要作为参考；不限制 AI 原有规划顺序或文档格式，可自主扩展设计。',
     inputSchema: z.object({ projectId: z.string().uuid() }).strict(),
     annotations: { readOnlyHint: true },
   }, safely(({ projectId }: { projectId: string }) => workspace.getProjectPlanningContext(projectId)));
@@ -365,7 +371,7 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
 
   server.registerTool('create_feature_design', {
     title: '创建 Feature Design 初版',
-    description: '为尚无设计的 Feature 原子创建 feature-design Specification 与 Revision 1；此前必须读取自适应设计指导。正文采用 Core Sections + Adaptive Sections，不得虚构 Web、数据库或 UI。',
+    description: '为尚无设计的功能保存原格式 Markdown 设计及首个不可变版本；无需先调用设计指导或使用固定章节，内容应对应实际项目。',
     inputSchema: z.object({
       featureId: z.string().uuid(),
       changeSummary: z.string().trim().min(1).max(500),
@@ -514,14 +520,62 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
     runId: string; status: 'FAILED' | 'ABORTED'; summary: string; issues: string[];
   }) => workspace.finishRunById(runId, status, { summary, issues })));
 
+  server.registerTool('list_project_archive', {
+    title: '读取项目档案目录',
+    description: '读取已存档文档的目录与来源，不要求特定模板或研发阶段。文档正文用 get_project_document 按需读取。',
+    inputSchema: z.object({ projectId: z.string().uuid() }).strict(),
+    annotations: { readOnlyHint: true },
+  }, safely(({ projectId }) => archive.listDocuments(projectId)));
+
+  server.registerTool('get_project_document', {
+    title: '读取存档原文与历史',
+    description: '读取文档原始正文，或不可变的历史版本；存档是项目参考，不限制新的方案。',
+    inputSchema: z.object({ projectId: z.string().uuid(), documentId: z.string().uuid(), history: z.boolean().optional() }).strict(),
+    annotations: { readOnlyHint: true },
+  }, safely(({ projectId, documentId, history }) => history
+    ? archive.getDocumentHistory(projectId, documentId) : archive.getDocument(projectId, documentId)));
+
+  server.registerTool('archive_project_document', {
+    title: '存档项目文档',
+    description: '保存原格式 Markdown 或文本全文，不替外部 AI 生成文档、不强制模板。新文档省略 documentId；更新必须同时提供 documentId 和刚读取的 expectedRevisionId，保留历史，不读取 sourcePath 指向的文件。',
+    inputSchema: z.object({
+      projectId: z.string().uuid(), documentId: z.string().uuid().optional(), expectedRevisionId: z.string().uuid().optional(),
+      title: z.string().trim().min(1).max(200), content: z.string().max(500_000),
+      originalFilename: z.string().max(255).nullable().optional(), sourcePath: z.string().max(2000).nullable().optional(),
+      contentType: z.enum(['text/markdown', 'text/plain']).optional(), changeSummary: z.string().max(2000).optional(),
+    }).strict(),
+  }, safely(({ projectId, documentId, expectedRevisionId, ...input }) => {
+    if (Boolean(documentId) !== Boolean(expectedRevisionId)) throw new ApiError(400, 'INVALID_INPUT', '更新文档需要文档 ID 与当前版本 ID');
+    return documentId ? archive.updateDocument(projectId, documentId, { ...input, expectedRevisionId: expectedRevisionId! }, principal)
+      : archive.createDocument(projectId, input, principal);
+  }));
+
+  server.registerTool('record_project_work', {
+    title: '记录计划、变化或结果',
+    description: '记录可分享的工作摘要、原因和实际验证范围，不要求先创建任务或遵循流程；不能以此授权执行或确认旧任务。相同操作重试使用原 operationId，后续记录可沿用回执中的 workId。来源由服务端凭证确定，未验证内容请注明。',
+    inputSchema: z.object({
+      projectId: z.string().uuid(), operationId: z.string().min(1).max(128), workId: z.string().uuid().optional(),
+      type: z.enum(['PLAN', 'PROGRESS', 'DESIGN', 'RESULT', 'NOTE']), title: z.string().trim().min(1).max(200),
+      content: z.string().max(100_000), occurredAt: z.string().datetime({ offset: true }).optional(),
+      documentRevisionIds: z.array(z.string().uuid()).max(100).optional(),
+    }).strict(),
+  }, safely(({ projectId, ...input }) => archive.appendEvent(projectId, input, principal)));
+
+  server.registerTool('list_project_work', {
+    title: '读取持续工作记录',
+    description: '按游标读取项目已提交的工作记录。记录不等于外部 AI 的实时状态；未上报的过程不会自动出现。',
+    inputSchema: z.object({ projectId: z.string().uuid(), workId: z.string().uuid().optional(), before: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
+    annotations: { readOnlyHint: true },
+  }, safely(({ projectId, ...query }) => archive.listEvents(projectId, query)));
+
   return server;
 }
 
-export function registerMcpRoutes(app: FastifyInstance, workspace: WorkspaceService, auth: AuthService) {
+export function registerMcpRoutes(app: FastifyInstance, workspace: WorkspaceService, auth: AuthService, archive: ArchiveService) {
   app.post('/mcp', async (request, reply) => {
     assertLocalMcpRequest(request);
     const principal = auth.requireAiToken(request, requiredScopes(request.body));
-    const server = createForgeFlowMcpServer(workspace, principal);
+    const server = createForgeFlowMcpServer(workspace, principal, archive);
     const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
     reply.hijack();

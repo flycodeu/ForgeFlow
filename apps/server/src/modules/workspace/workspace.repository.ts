@@ -411,6 +411,10 @@ export class WorkspaceRepository {
       .where(eq(specifications.id, specId)).run().changes;
   }
 
+  hasProjectWorkEvents(projectId: string): boolean {
+    return Boolean(this.connection.sqlite.prepare('SELECT 1 FROM rd_work_event WHERE project_id = ? LIMIT 1').get(projectId));
+  }
+
   deleteProject(projectId: string) {
     return this.transaction(() => {
       const sqlite = this.connection.sqlite;

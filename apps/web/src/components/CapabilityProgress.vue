@@ -45,10 +45,10 @@ function statusName(status: Capability['status']) {
     <header class="compact-page-heading">
       <div class="heading-title-group">
         <h1>实施进度</h1>
-        <span class="heading-badge">共 {{ rows.length }} 项能力</span>
+        <span class="heading-badge">{{ rows.length }} 项</span>
       </div>
       <div class="rollup-stats">
-        <span class="stat-label">已交付</span>
+        <span class="stat-label">标记完成</span>
         <strong class="stat-value">{{ rows.filter(item => item.status === 'DONE').length }} <small>/ {{ rows.length }}</small></strong>
       </div>
     </header>
@@ -56,10 +56,10 @@ function statusName(status: Capability['status']) {
       <div class="matrix-head">
         <span>所属模块</span>
         <span>关联功能</span>
-        <span>能力项名称</span>
-        <span>架构设计</span>
-        <span>工程实现</span>
-        <span>自动化验证</span>
+        <span>功能</span>
+        <span>设计</span>
+        <span>实现</span>
+        <span>验证</span>
       </div>
       <div v-if="rows.length" class="matrix-rows">
         <button
@@ -76,7 +76,6 @@ function statusName(status: Capability['status']) {
             <strong>{{ featureOf(capability)?.name ?? '—' }}</strong>
           </span>
           <span class="cell-capability">
-            <code class="cap-code">{{ capability.code }}</code>
             <strong class="cap-name">{{ capability.name }}</strong>
             <span class="cap-pill" :data-status="capability.status">{{ statusName(capability.status) }}</span>
           </span>
@@ -119,7 +118,8 @@ function statusName(status: Capability['status']) {
 
 <style scoped>
 .progress-page {
-  color: #0f172a;
+  container: progress / inline-size;
+  color: var(--ink);
 }
 .heading-title-group {
   display: flex;
@@ -130,9 +130,9 @@ function statusName(status: Capability['status']) {
   display: inline-flex;
   align-items: center;
   padding: 3px 9px;
-  background: #f1f5f9;
+  background: var(--surface-subtle);
   border-radius: 999px;
-  color: #64748b;
+  color: var(--muted);
   font-size: 12px;
   font-weight: 500;
 }
@@ -141,44 +141,44 @@ function statusName(status: Capability['status']) {
   align-items: baseline;
   gap: 8px;
   padding: 6px 14px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
 }
 .stat-label {
-  color: #64748b;
+  color: var(--muted);
   font-size: 12.5px;
   font-weight: 500;
 }
 .stat-value {
-  color: #2563eb;
+  color: var(--primary);
   font-size: 17px;
   font-weight: 700;
   line-height: 1;
 }
 .stat-value small {
-  color: #94a3b8;
+  color: var(--muted-light);
   font-size: 12.5px;
   font-weight: 500;
   margin-left: 2px;
 }
 .matrix-card {
-  background: #ffffff;
+  background: var(--surface);
   overflow: hidden;
   border-radius: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
 }
 .matrix-head {
   display: grid;
-  grid-template-columns: minmax(130px, 1.2fr) minmax(150px, 1.4fr) minmax(260px, 2.2fr) 110px 110px 130px;
+  grid-template-columns: minmax(90px, 1fr) minmax(100px, 1fr) minmax(160px, 1.6fr) 80px 80px 120px;
   align-items: center;
   gap: 16px;
   padding: 12px 20px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
-  color: #475569;
+  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-secondary);
   font-size: 12.5px;
   font-weight: 600;
 }
@@ -188,7 +188,7 @@ function statusName(status: Capability['status']) {
 }
 .matrix-row {
   display: grid;
-  grid-template-columns: minmax(130px, 1.2fr) minmax(150px, 1.4fr) minmax(260px, 2.2fr) 110px 110px 130px;
+  grid-template-columns: minmax(90px, 1fr) minmax(100px, 1fr) minmax(160px, 1.6fr) 80px 80px 120px;
   align-items: center;
   gap: 16px;
   width: 100%;
@@ -198,16 +198,16 @@ function statusName(status: Capability['status']) {
   padding: 0 20px;
   box-sizing: border-box;
   border: 0;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--surface-subtle);
   background: transparent;
-  color: #334155;
+  color: var(--ink-secondary);
   font-size: 13.5px;
   text-align: left;
   transition: background 0.12s;
   cursor: pointer;
 }
 .matrix-row:hover {
-  background: #f8fafc;
+  background: var(--surface-subtle);
 }
 .cell-module, .cell-feature {
   display: flex;
@@ -219,7 +219,7 @@ function statusName(status: Capability['status']) {
 }
 .cell-module strong, .cell-feature strong {
   overflow: hidden;
-  color: #0f172a;
+  color: var(--ink);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13.5px;
@@ -239,14 +239,14 @@ function statusName(status: Capability['status']) {
   align-items: center;
   padding: 2px 6px;
   border-radius: 4px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  color: #475569;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  color: var(--ink-secondary);
   font: 600 11px var(--mono);
   flex-shrink: 0;
 }
 .cap-name {
-  color: #0f172a;
+  color: var(--ink);
   font-weight: 600;
   font-size: 13.5px;
   overflow: hidden;
@@ -258,15 +258,15 @@ function statusName(status: Capability['status']) {
   align-items: center;
   padding: 2px 7px;
   border-radius: 4px;
-  background: #f1f5f9;
-  color: #64748b;
+  background: var(--surface-subtle);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 600;
   flex-shrink: 0;
 }
 .cap-pill[data-status='DONE'] { background: #dcfce7; color: #15803d; }
 .cap-pill[data-status='IMPLEMENTING'] { background: #fef3c7; color: #b45309; }
-.cap-pill[data-status='TESTING'] { background: #e0f2fe; color: #0369a1; }
+.cap-pill[data-status='TESTING'] { background: #e0f2fe; color: var(--primary-hover); }
 .cap-pill[data-status='BLOCKED'] { background: #ffe4e6; color: #e11d48; }
 
 .cell-status {
@@ -279,8 +279,8 @@ function statusName(status: Capability['status']) {
   align-items: center;
   padding: 2px 8px;
   border-radius: 4px;
-  background: #f1f5f9;
-  color: #64748b;
+  background: var(--surface-subtle);
+  color: var(--muted);
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
@@ -291,12 +291,22 @@ function statusName(status: Capability['status']) {
   font-weight: 600;
 }
 .status-badge-clean.active {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: var(--primary-subtle);
+  color: var(--primary-hover);
   font-weight: 600;
 }
 .status-badge-clean.warn {
   background: #fee2e2;
   color: #b91c1c;
+}
+@container progress (max-width: 900px) {
+  .matrix-head, .matrix-row { grid-template-columns: minmax(0, 1fr) 76px 76px 120px; gap: 10px; padding-inline: 12px; }
+  .matrix-head > :nth-child(-n+2), .matrix-row > :nth-child(-n+2) { display: none; }
+}
+@container progress (max-width: 540px) {
+  .matrix-head, .matrix-row { grid-template-columns: minmax(0, 1fr) 120px; }
+  .matrix-head > :nth-child(4), .matrix-head > :nth-child(5), .matrix-row > :nth-child(4), .matrix-row > :nth-child(5) { display: none; }
+  .cell-capability { min-width: 0; }
+  .cap-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 </style>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { Feature, FeatureStatus, ProjectDetail, RunReportedStatus } from '@forgeflow/contracts';
+import type { AiRun, Feature, FeatureStatus, ProjectDetail, RunReportedStatus } from '@forgeflow/contracts';
 
 const props = defineProps<{ detail: ProjectDetail }>();
 const emit = defineEmits<{ openFeature: [feature: Feature] }>();
@@ -70,6 +70,11 @@ function runStatusLabel(status: RunReportedStatus) {
   };
   return map[status] ?? status;
 }
+function evidenceLabel(run: AiRun | undefined) {
+  const evidence = run?.verificationSummary;
+  if (!evidence) return '未记录';
+  return `${evidence.origin === 'AI_REPORTED' ? 'AI 报告' : '证据'}${runStatusLabel(evidence.reportedStatus)}`;
+}
 
 function formatTime(iso: string) {
   if (!iso) return '—';
@@ -83,7 +88,6 @@ function formatTime(iso: string) {
     <header class="compact-page-heading">
       <div class="heading-title-group">
         <h1>测试与验收</h1>
-        <span class="heading-badge">质量交付看板</span>
       </div>
     </header>
 
@@ -133,8 +137,6 @@ function formatTime(iso: string) {
     <section v-if="activeTab === 'acceptance'" class="surface matrix-card">
       <div class="qa-table-head">
         <span>模块 / 功能</span>
-        <span>编号</span>
-        <span>能力项数</span>
         <span>最新验证证据</span>
         <span>验收状态</span>
         <span>操作</span>
@@ -144,17 +146,15 @@ function formatTime(iso: string) {
           v-for="feature in features"
           :key="feature.id"
           class="qa-table-row"
+          role="button"
+          tabindex="0"
           @click="emit('openFeature', feature)"
+          @keydown.enter.self="emit('openFeature', feature)"
+          @keydown.space.prevent.self="emit('openFeature', feature)"
         >
           <div class="cell-main">
             <span class="module-prefix">{{ moduleOf(feature.moduleId)?.name ?? '默认模块' }} /</span>
             <strong>{{ feature.name }}</strong>
-          </div>
-          <div class="cell-code">
-            <code class="code-badge">{{ feature.code }}</code>
-          </div>
-          <div class="cell-count">
-            <span>{{ capabilitiesOf(feature.id).length }} 项能力</span>
           </div>
           <div class="cell-test">
             <template v-if="latestRunOf(feature.id)?.verificationSummary">
@@ -165,10 +165,8 @@ function formatTime(iso: string) {
                   fail: latestRunOf(feature.id)?.verificationSummary?.status === 'FAIL',
                 }"
               >
-                {{ latestRunOf(feature.id)?.verificationSummary?.status === 'PASS' ? '✓' : '✗' }}
-                {{ runStatusLabel(latestRunOf(feature.id)!.verificationSummary!.status) }}
+                {{ evidenceLabel(latestRunOf(feature.id)) }}
               </span>
-              <small class="test-note">{{ latestRunOf(feature.id)?.verificationSummary?.summary }}</small>
             </template>
             <span v-else class="test-empty">暂无核验记录</span>
           </div>
@@ -179,7 +177,7 @@ function formatTime(iso: string) {
           </div>
           <div class="cell-action">
             <button class="text-button" type="button" @click.stop="emit('openFeature', feature)">
-              查看设计与验证 →
+              查看 →
             </button>
           </div>
         </div>
@@ -220,7 +218,7 @@ function formatTime(iso: string) {
                 fail: run.verificationSummary?.status === 'FAIL',
               }"
             >
-              {{ run.verificationSummary?.status === 'PASS' ? '✓ 通过' : '✗ 未通过' }}
+              {{ evidenceLabel(run) }}
             </span>
             <small>{{ run.verificationSummary?.summary }}</small>
           </div>
@@ -242,7 +240,7 @@ function formatTime(iso: string) {
 
 <style scoped>
 .testing-workspace {
-  color: #0f172a;
+  color: var(--ink);
 }
 .heading-title-group {
   display: flex;
@@ -253,9 +251,9 @@ function formatTime(iso: string) {
   display: inline-flex;
   align-items: center;
   padding: 3px 9px;
-  background: #f1f5f9;
+  background: var(--surface-subtle);
   border-radius: 999px;
-  color: #64748b;
+  color: var(--muted);
   font-size: 12px;
   font-weight: 500;
 }
@@ -269,23 +267,23 @@ function formatTime(iso: string) {
   display: flex;
   flex-direction: column;
   padding: 12px 16px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   transition: all 0.15s ease;
 }
 .kpi-card:hover {
-  border-color: #cbd5e1;
+  border-color: var(--line-strong);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
 }
 .kpi-label {
-  color: #64748b;
+  color: var(--muted);
   font-size: 12px;
   font-weight: 500;
 }
 .kpi-value {
-  color: #0f172a;
+  color: var(--ink);
   font-size: 22px;
   font-weight: 700;
   line-height: 1.2;
@@ -299,7 +297,7 @@ function formatTime(iso: string) {
   color: #dc2626;
 }
 .kpi-meta {
-  color: #94a3b8;
+  color: var(--muted-light);
   font-size: 11.5px;
 }
 
@@ -307,14 +305,14 @@ function formatTime(iso: string) {
   display: flex;
   gap: 8px;
   margin-bottom: 16px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--line);
   padding-bottom: 4px;
 }
 .tab-btn {
   padding: 8px 16px;
   border-radius: 6px;
   background: transparent;
-  color: #64748b;
+  color: var(--muted);
   font-size: 13.5px;
   font-weight: 500;
   border: 0;
@@ -322,18 +320,18 @@ function formatTime(iso: string) {
   transition: all 0.15s ease;
 }
 .tab-btn:hover {
-  color: #0f172a;
-  background: #f1f5f9;
+  color: var(--ink);
+  background: var(--surface-subtle);
 }
 .tab-btn.active {
-  color: #2563eb;
-  background: #eff6ff;
+  color: var(--primary);
+  background: var(--primary-subtle);
   font-weight: 600;
 }
 
 .matrix-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
@@ -342,19 +340,19 @@ function formatTime(iso: string) {
 /* Tab 1: QA Acceptance Table */
 .qa-table-head {
   display: grid;
-  grid-template-columns: minmax(200px, 1.4fr) 110px 100px minmax(240px, 1.8fr) 110px 140px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(160px, 1fr) 100px 66px;
   align-items: center;
   gap: 16px;
   padding: 12px 20px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
-  color: #475569;
+  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-secondary);
   font-size: 12.5px;
   font-weight: 600;
 }
 .qa-table-row {
   display: grid;
-  grid-template-columns: minmax(200px, 1.4fr) 110px 100px minmax(240px, 1.8fr) 110px 140px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(160px, 1fr) 100px 66px;
   align-items: center;
   gap: 16px;
   width: 100%;
@@ -363,13 +361,13 @@ function formatTime(iso: string) {
   max-height: 52px;
   padding: 0 20px;
   box-sizing: border-box;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--surface-subtle);
   text-align: left;
   transition: background 0.12s;
   cursor: pointer;
 }
 .qa-table-row:hover {
-  background: #f8fafc;
+  background: var(--surface-subtle);
 }
 .cell-main {
   display: flex;
@@ -380,11 +378,11 @@ function formatTime(iso: string) {
   text-overflow: ellipsis;
 }
 .module-prefix {
-  color: #94a3b8;
+  color: var(--muted-light);
   font-size: 12px;
 }
 .cell-main strong {
-  color: #0f172a;
+  color: var(--ink);
   font-size: 13.5px;
   font-weight: 600;
 }
@@ -393,14 +391,14 @@ function formatTime(iso: string) {
   align-items: center;
   padding: 2px 6px;
   border-radius: 4px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  color: #475569;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  color: var(--ink-secondary);
   font: 600 11px var(--mono);
 }
 .cell-count span {
   font-size: 12px;
-  color: #64748b;
+  color: var(--muted);
 }
 .cell-test {
   display: flex;
@@ -429,14 +427,14 @@ function formatTime(iso: string) {
   color: #b91c1c;
 }
 .test-note {
-  color: #64748b;
+  color: var(--muted);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .test-empty {
-  color: #94a3b8;
+  color: var(--muted-light);
   font-size: 12px;
 }
 .feature-status-pill {
@@ -448,9 +446,9 @@ function formatTime(iso: string) {
   font-weight: 600;
   white-space: nowrap;
 }
-.feature-status-pill[data-status="DRAFT"] { background: #f1f5f9; color: #475569; }
-.feature-status-pill[data-status="DESIGNING"] { background: #eff6ff; color: #1d4ed8; }
-.feature-status-pill[data-status="READY"] { background: #e0f2fe; color: #0369a1; }
+.feature-status-pill[data-status="DRAFT"] { background: var(--surface-subtle); color: var(--ink-secondary); }
+.feature-status-pill[data-status="DESIGNING"] { background: var(--primary-subtle); color: var(--primary-hover); }
+.feature-status-pill[data-status="READY"] { background: #e0f2fe; color: var(--primary-hover); }
 .feature-status-pill[data-status="IMPLEMENTING"] { background: #fef3c7; color: #b45309; }
 .feature-status-pill[data-status="VERIFYING"] { background: #f3e8ff; color: #7e22ce; }
 .feature-status-pill[data-status="ACCEPTANCE_PENDING"] { background: #ffedd5; color: #c2410c; }
@@ -471,9 +469,9 @@ function formatTime(iso: string) {
   align-items: center;
   gap: 16px;
   padding: 12px 20px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
-  color: #475569;
+  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-secondary);
   font-size: 12.5px;
   font-weight: 600;
 }
@@ -488,12 +486,12 @@ function formatTime(iso: string) {
   max-height: 52px;
   padding: 0 20px;
   box-sizing: border-box;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--surface-subtle);
   font-size: 13px;
   text-align: left;
 }
 .run-cell-time time {
-  color: #64748b;
+  color: var(--muted);
   font-size: 12px;
   font-family: var(--mono);
 }
@@ -503,14 +501,14 @@ function formatTime(iso: string) {
   overflow: hidden;
 }
 .run-cell-task strong {
-  color: #0f172a;
+  color: var(--ink);
   font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .run-cell-task small {
-  color: #94a3b8;
+  color: var(--muted-light);
   font-size: 11px;
 }
 .run-cell-actor {
@@ -518,12 +516,12 @@ function formatTime(iso: string) {
   flex-direction: column;
 }
 .run-cell-actor span {
-  color: #334155;
+  color: var(--ink-secondary);
   font-weight: 500;
   font-size: 12.5px;
 }
 .run-cell-actor small {
-  color: #94a3b8;
+  color: var(--muted-light);
   font-size: 11px;
 }
 .run-cell-verdict {
@@ -535,14 +533,14 @@ function formatTime(iso: string) {
   text-overflow: ellipsis;
 }
 .run-cell-verdict small {
-  color: #64748b;
+  color: var(--muted);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .run-cell-files span {
-  color: #64748b;
+  color: var(--muted);
   font-size: 12px;
 }
 .issue-badge {
@@ -557,9 +555,25 @@ function formatTime(iso: string) {
 .clean-badge {
   display: inline-flex;
   padding: 2px 6px;
-  background: #f1f5f9;
-  color: #64748b;
+  background: var(--surface-subtle);
+  color: var(--muted);
   border-radius: 4px;
   font-size: 11.5px;
+}
+.testing-workspace { container: testing / inline-size; }
+.runs-table-head, .runs-table-row { min-width: 930px; }
+.matrix-card { overflow-x: auto; border-radius: 6px; }
+.cell-main strong { overflow: hidden; text-overflow: ellipsis; }
+.cell-main .module-prefix { flex-shrink: 0; }
+@container testing (max-width: 740px) {
+  .testing-kpis-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .qa-table-head, .qa-table-row { grid-template-columns: minmax(0, 1fr) 130px 76px; gap: 8px; padding-inline: 12px; }
+  .qa-table-head > :last-child, .qa-table-row > :last-child, .module-prefix { display: none; }
+  .testing-tabs { flex-wrap: wrap; gap: 4px; }
+  .tab-btn { padding-inline: 10px; }
+}
+@container testing (max-width: 440px) {
+  .qa-table-head, .qa-table-row { grid-template-columns: minmax(0, 1fr) 120px; }
+  .qa-table-head > :nth-child(3), .qa-table-row > :nth-child(3) { display: none; }
 }
 </style>

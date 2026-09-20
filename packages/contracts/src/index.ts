@@ -1,3 +1,5 @@
+export * from './archive.js';
+
 export type HealthResponse = {
   status: 'ok' | 'error';
   service: 'forgeflow-server';

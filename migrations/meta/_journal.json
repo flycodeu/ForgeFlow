@@ -8,6 +8,20 @@
       "when": 1789866458916,
       "tag": "schema",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789912418388,
+      "tag": "0001_add_project_work_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789912925556,
+      "tag": "0002_seal_work_events",
+      "breakpoints": true
     }
   ]
 }

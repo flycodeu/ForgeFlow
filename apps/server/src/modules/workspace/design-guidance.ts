@@ -225,12 +225,12 @@ export function buildFeatureDesignGuidance(input: GuidanceInput): FeatureDesignG
     markdownTemplate: buildTemplate(input, profile),
     suggestedTasks: PROFILES[profile].tasks.map((task, index) => ({ ...task, code: `T${String(index + 1).padStart(2, '0')}` })),
     guardrails: [
-      '先读取项目背景、Research、Requirement、Architecture 与 Technology，再决定技术章节。',
+      '以下章节和模板仅供参考，不是提交门槛；可保留原有文档格式、自主调整顺序或扩展设计。',
       '不得把外部参考直接复制为当前架构；必须记录采用、不采用及原因。',
       '不得虚构项目不存在的 Database、HTTP API、UI、Frontend 或 Backend。',
-      '每个 Capability 必须包含一句可读的功能定义，以及输入、输出、状态变化、规则、失败恢复、数据契约和验收证据。',
-      '功能设计必须覆盖从范围确认、详细行为、实现影响到验收与交付的完整链路；不适用项要说明原因，不得直接省略。',
-      'Artifact Impact 仅保存在版本化 Markdown；不得创建 Artifact、Capability、API 或关系图表。',
+      '按实际需要记录功能用途、输入输出、规则、数据约定、异常和验证；没有内容的章节可以省略。',
+      '已有设计是参考基线，不限制新的方案；记录改变了什么、原因和实际验证范围，便于后续维护。',
+      '原始文档可直接存入项目档案；需要独立追踪的功能和资料可再建立关联。',
     ],
   };
 }

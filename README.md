@@ -1,6 +1,6 @@
 # ForgeFlow
 
-ForgeFlow 是一个面向外部 AI 编程工具的软件工程工作台。它把原本散落在聊天、Markdown、代码仓库和测试输出中的研发信息，组织为可浏览、可追踪、可继续执行的工程上下文。
+ForgeFlow 保存功能设计档案与 AI 工作记录，让项目文档、设计变化和实施结果可以持续回看。AI 可以沿用自己的工作方式和文档格式，也可以扩展原计划；这里负责保留记录，不要求固定的规划顺序。
 
 ForgeFlow 不内置模型，也不会扫描用户磁盘或启动任意 Shell。Codex、Claude Code 等外部工具通过 MCP 读取项目设计和源码绑定，在自己的工作环境中完成开发，再把结果写回 ForgeFlow。
 
@@ -13,6 +13,8 @@ ForgeFlow 不内置模型，也不会扫描用户磁盘或启动任意 Shell。C
 │     ├─ 能力项
 │     └─ 工程设计
 ├─ 源码绑定
+├─ 项目文档与历史版本
+├─ 工作记录
 ├─ 实施任务
 └─ AI 执行记录
 ```
@@ -22,6 +24,28 @@ ForgeFlow 不内置模型，也不会扫描用户磁盘或启动任意 Shell。C
 - `ProjectSource` 登记一个项目关联的多个 Git 仓库或普通目录，不把源码位置等同于业务模块。
 - `Task / Run` 记录实际实施过程；Run 会冻结当时采用的设计版本和多源码快照。
 - 默认工作流为 `AUTO`；已有 `CONTROLLED` 审查与授权数据继续兼容。
+- 项目文档复用现有资料版本存储；独立工作记录不依赖 Task / Run，不会把“完成”的自述换算成验证通过。
+
+## 项目档案与记录
+
+项目内的“项目档案”支持 Markdown / UTF-8 文本原文存储、编辑、历史查看和 JSON 项目快照导出。编辑必须基于当前版本，冲突不会覆盖旧内容。当前不提供 PDF / Word 解析、附件存储或 JSON 恢复。
+
+“工作记录”可以独立补记计划、进展、设计和结果，并关联具体文档版本。记录只追加；已有工作记录的项目暂不支持永久删除。更正应追加说明，导出不包含系统凭证。
+
+在仓库根目录同步明确指定的文件：
+
+```powershell
+pnpm archive sync --project FORGEFLOW --file "设计.md"
+pnpm archive sync --project FORGEFLOW --file "设计.md" --watch
+pnpm archive record --project FORGEFLOW --type RESULT --title "本轮结果" --file "结果.md" --operation-id "本轮唯一标识"
+pnpm archive export --project FORGEFLOW --out "项目档案.json"
+```
+
+项目须事先创建。`--watch` 每 5 秒同步指定文件的当前内容；进程关闭后停止，尚无持久重试队列，中间版本不保证捕获。不会自动读取所有 AI 会话。导出命令拒绝覆盖已有文件。
+
+MCP 新增 `list_project_archive`、`get_project_document`、`archive_project_document`、`record_project_work`、`list_project_work`。读取需要 `project:read` / `spec:read`，写入需要 `spec:write`；导出另需 `task:read`。接入后由客户端主动记录，不改变其原有生成文档方式。
+
+CLI 默认连接本机 8787，可通过 `FORGEFLOW_URL` 指定其他本机服务地址，通过 `FORGEFLOW_TOKEN` 提供已有凭证。重试事件应保留 `operationId`；当前去重身份绑定具体凭证，轮换凭证后的续接尚未支持。
 
 ## 技术栈
 
@@ -53,11 +77,13 @@ pnpm dev
 
 ## 数据库结构
 
-`migrations/schema.sql` 是新安装使用的完整数据库基线，不再把开发阶段拆成一组随机命名的 SQL 文件。
+`migrations/schema.sql` 是数据库基线，后续命名迁移按账本顺序应用；不要修改已经应用的迁移。
 
 ```text
 migrations/
-├─ schema.sql                         # 当前完整结构
+├─ schema.sql                       # 初始基线
+├─ 0001_add_project_work_events.sql # 工作记录
+├─ 0002_seal_work_events.sql         # 记录只追加
 ├─ meta/
 │  ├─ _journal.json                  # Drizzle 迁移账本
 │  └─ schema_snapshot.json           # 当前 Drizzle 快照

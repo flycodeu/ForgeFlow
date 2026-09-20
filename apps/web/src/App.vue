@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import type {
-  AiRun, AiScope, AiTokenSummary, CreatedAiToken, DesignReview, Feature, FeatureStatus, HealthResponse, Module, Project,
+  AiRun, AiScope, AiTokenSummary, Capability, CreatedAiToken, DesignReview, Feature, FeatureStatus, HealthResponse, Module, Project,
   ProjectDetail, ProjectSourceKind, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary,
   SpecificationSummary, TaskCategory, TaskStatus, TaskType, RunPhase,
 } from '@forgeflow/contracts';
@@ -11,11 +11,12 @@ import ProjectLifecycleBar from './components/ProjectLifecycleBar.vue';
 import ResearchWorkspace from './components/ResearchWorkspace.vue';
 import SourceIntegration from './components/SourceIntegration.vue';
 import TestingWorkspace from './components/TestingWorkspace.vue';
+import ProjectArchive from './components/ProjectArchive.vue';
 import { api, ApiRequestError } from './api-client';
 import './app.css';
 
 type WorkspacePage = 'projects' | 'overview' | 'background' | 'research' | 'requirements' | 'architecture' | 'technology'
-  | 'sources' | 'features' | 'feature-detail' | 'planning' | 'development' | 'testing' | 'ai' | 'history' | 'document';
+  | 'sources' | 'features' | 'feature-detail' | 'planning' | 'development' | 'testing' | 'ai' | 'history' | 'document' | 'archive' | 'records';
 type DocumentPage = 'background' | 'research' | 'requirements' | 'architecture' | 'technology' | 'document';
 type RevisionActivity = SpecificationRevisionSummary & { specification: SpecificationSummary };
 type ProjectSourceDraft = {
@@ -33,7 +34,10 @@ const projectActivity = ref<RevisionActivity[]>([]);
 const selectedProjectId = ref<string | null>(null);
 const selectedSpecId = ref<string | null>(null);
 const selectedFeature = ref<Feature | null>(null);
+const selectedCapabilityId = ref<string | null>(null);
 const collapsedModules = ref(new Set<string>());
+const collapsedFeatures = ref(new Set<string>());
+const featureSearch = ref('');
 const workspacePage = ref<WorkspacePage>('projects');
 const documentMode = ref<'read' | 'edit'>('read');
 const showProjectDialog = ref(false);
@@ -46,6 +50,7 @@ const health = ref('连接中');
 const error = ref('');
 const notice = ref('');
 const busy = ref(false);
+const archiveView = ref<{ canLeave: () => boolean } | null>(null);
 const projectKey = ref('');
 const projectName = ref('');
 const projectDescription = ref('');
@@ -159,8 +164,10 @@ const navSections: NavSection[] = [
   {
     title: '工作区',
     items: [
-      { id: 'overview', label: '待我确认' },
+      { id: 'overview', label: '概览' },
       { id: 'features', label: '功能清单' },
+      { id: 'records', label: '工作记录' },
+      { id: 'archive', label: '项目档案' },
     ],
   },
   {
@@ -274,22 +281,48 @@ function navItemActive(item: NavItem) {
     || (item.id === 'features' && workspacePage.value === 'feature-detail')
     || Boolean(item.children?.some((child) => child.id === workspacePage.value));
 }
-function formatProjectType(type?: string): string {
-  if (!type) return '通用工程';
-  const raw = type.trim();
-  const lower = raw.toLowerCase();
-  if (lower.includes('python') && (lower.includes('ai') || lower.includes('cv') || lower.includes('vision'))) return 'Python 算法与视觉工程';
-  if (lower.includes('spring') && lower.includes('video')) return '多服务音视频协同平台';
-  if (lower.includes('rtsp') || (lower.includes('video') && lower.includes('pipeline'))) return '音视频推理流水线';
-  if (lower.includes('godot') || lower.includes('game')) return '游戏客户端架构';
-  if (lower.includes('web') || lower.includes('vue') || lower.includes('react') || lower.includes('fastify')) return '现代 Web 应用';
-  if (lower === 'general') return '通用工程';
-  return raw;
-}
 function statusName(status: FeatureStatus) { return featureStatuses.find((item) => item.value === status)?.label ?? status; }
 function featuresForModule(moduleId: string) { return projectDetail.value?.features.filter((item) => item.moduleId === moduleId) ?? []; }
+function matchesFeatureSearch(name: string) { return name.toLocaleLowerCase().includes(featureSearch.value.trim().toLocaleLowerCase()); }
+function visibleFeatures(module: Module) {
+  return featuresForModule(module.id).filter(feature => matchesFeatureSearch(module.name) || matchesFeatureSearch(feature.name)
+    || capabilitiesForFeature(feature.id).some(capability => matchesFeatureSearch(capability.name)));
+}
+const visibleModules = computed(() => (projectDetail.value?.modules ?? []).filter(module => matchesFeatureSearch(module.name) || visibleFeatures(module).length));
+function visibleCapabilities(module: Module, feature: Feature) {
+  return capabilitiesForFeature(feature.id).filter(capability => matchesFeatureSearch(module.name) || matchesFeatureSearch(feature.name) || matchesFeatureSearch(capability.name));
+}
+function setTreeExpanded(expanded: boolean) {
+  collapsedModules.value = new Set(expanded ? [] : (projectDetail.value?.modules ?? []).map(module => module.id));
+  collapsedFeatures.value = new Set(expanded ? [] : (projectDetail.value?.features ?? []).map(feature => feature.id));
+}
 function tasksForFeature(featureId: string) { return projectDetail.value?.tasks.filter((item) => item.featureId === featureId) ?? []; }
 function capabilitiesForFeature(featureId: string) { return projectDetail.value?.capabilities.filter((item) => item.featureId === featureId) ?? []; }
+function tasksForCapability(capabilityId: string) { return projectDetail.value?.tasks.filter((item) => item.capabilityId === capabilityId) ?? []; }
+function capabilityStatusName(status: Capability['status']) {
+  return ({ DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中', TESTING: '验证中', DONE: '已完成', BLOCKED: '受阻' })[status];
+}
+function capabilityDesignLabel(capability: Capability) { return capability.status === 'DRAFT' ? '待设计' : '已定义'; }
+function capabilityImplementationLabel(capability: Capability) {
+  const tasks = tasksForCapability(capability.id);
+  if (!tasks.length) {
+    if (capability.status === 'DONE' || capability.status === 'TESTING') return '已实现';
+    if (capability.status === 'IMPLEMENTING') return '实现中';
+    if (capability.status === 'BLOCKED') return '受阻';
+    return '待规划';
+  }
+  const done = tasks.filter((item) => item.status === 'DONE' || item.status === 'CONFIRMED').length;
+  return `${done}/${tasks.length} 任务`;
+}
+function capabilityVerificationLabel(capabilityId: string) {
+  const taskIds = new Set(tasksForCapability(capabilityId).map((item) => item.id));
+  const run = (projectDetail.value?.runs ?? [])
+    .filter((item) => taskIds.has(item.taskId))
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  if (!run) return '无证据';
+  const label = verificationLabel(run);
+  return label === '—' ? '无证据' : label;
+}
 function featureDesignLabel(featureId: string) {
   const design = projectDetail.value?.specifications.find((item) => item.featureId === featureId && item.kind === 'feature-design');
   if (!design?.latestRevisionNumber) return '待设计';
@@ -461,9 +494,10 @@ async function refreshCurrentProject() {
   projectCardMeta.value[id] = { updatedAt: dates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]! };
 }
 async function selectProject(id: string) {
+  if (archiveView.value && !archiveView.value.canLeave()) return;
   clearMessage(); busy.value = true; selectedProjectId.value = id; selectedSpecId.value = null;
   specificationDetail.value = null; selectedRevision.value = null; revisions.value = []; projectActivity.value = [];
-  try { await refreshCurrentProject(); workspacePage.value = 'features'; mobileNavOpen.value = false; }
+  try { await refreshCurrentProject(); featureSearch.value = ''; workspacePage.value = 'features'; mobileNavOpen.value = false; }
   catch (cause) { showError(cause); } finally { busy.value = false; }
 }
 async function loadSpecification(id: string) {
@@ -481,8 +515,9 @@ async function openDocumentPage(page: DocumentPage, preferredSpec?: Specificatio
   busy.value = true;
   try { await loadSpecification(spec.id); } catch (cause) { showError(cause); } finally { busy.value = false; }
 }
-function showProjects() { clearMessage(); mobileNavOpen.value = false; void loadWorkspace().catch(showError); }
+function showProjects() { if (archiveView.value && !archiveView.value.canLeave()) return; clearMessage(); mobileNavOpen.value = false; void loadWorkspace().catch(showError); }
 function navigate(page: WorkspacePage) {
+  if (page !== workspacePage.value && archiveView.value && !archiveView.value.canLeave()) return;
   clearMessage(); mobileNavOpen.value = false;
   if (['background', 'research', 'requirements', 'architecture', 'technology'].includes(page)) { void openDocumentPage(page as DocumentPage); return; }
   workspacePage.value = page;
@@ -505,6 +540,11 @@ function toggleModule(moduleId: string) {
   const next = new Set(collapsedModules.value);
   if (next.has(moduleId)) next.delete(moduleId); else next.add(moduleId);
   collapsedModules.value = next;
+}
+function toggleFeature(featureId: string) {
+  const next = new Set(collapsedFeatures.value);
+  if (next.has(featureId)) next.delete(featureId); else next.add(featureId);
+  collapsedFeatures.value = next;
 }
 function editModule(module?: Module) {
   editingModuleId.value = module?.id ?? null; moduleCode.value = module?.code ?? ''; moduleName.value = module?.name ?? '';
@@ -539,8 +579,8 @@ async function saveFeature() {
     notice.value = editingFeatureId.value ? '功能信息已更新' : '功能已创建';
   } catch (cause) { showError(cause); } finally { busy.value = false; }
 }
-async function openFeature(feature: Feature) {
-  clearMessage(); selectedFeature.value = feature; workspacePage.value = 'feature-detail'; documentMode.value = 'read'; mobileNavOpen.value = false;
+async function openFeature(feature: Feature, capabilityId: string | null = null) {
+  clearMessage(); selectedFeature.value = feature; selectedCapabilityId.value = capabilityId; workspacePage.value = 'feature-detail'; documentMode.value = 'read'; mobileNavOpen.value = false;
   selectedRun.value = sortedRuns.value.find((item) => item.featureId === feature.id) ?? null;
 }
 function prepareNewMaterial(page: DocumentPage) {
@@ -768,6 +808,7 @@ function closeCreateTokenModal() {
 }
 
 async function openTokens() {
+  if (archiveView.value && !archiveView.value.canLeave()) return;
   clearMessage(); revealedToken.value = '';
   try { tokens.value = await api<AiTokenSummary[]>('/api/ai-tokens'); appView.value = 'tokens'; } catch (cause) { showError(cause); }
 }
@@ -1105,11 +1146,10 @@ onMounted(async () => {
             role="button"
             tabindex="0"
             @click="selectProject(project.id)"
-            @keydown.enter="selectProject(project.id)"
+            @keydown.enter.self="selectProject(project.id)"
+            @keydown.space.prevent.self="selectProject(project.id)"
           >
             <div class="project-card-top">
-              <span class="project-key-tag">{{ project.projectKey }}</span>
-              <span class="project-type-tag">{{ formatProjectType(project.projectType) }}</span>
               <div class="card-top-actions">
                 <button
                   type="button"
@@ -1123,7 +1163,7 @@ onMounted(async () => {
               </div>
             </div>
             <h2 class="project-card-title">{{ project.name }}</h2>
-            <p class="project-card-desc">{{ project.description || '暂无项目描述' }}</p>
+            <p v-if="project.description" class="project-card-desc">{{ project.description }}</p>
             <dl class="project-card-meta">
               <div><dt>创建时间</dt><dd>{{ formatDate(project.createdAt) }}</dd></div>
               <div><dt>最近更新</dt><dd>{{ formatTime(projectCardMeta[project.id]?.updatedAt ?? project.createdAt) }}</dd></div>
@@ -1157,7 +1197,6 @@ onMounted(async () => {
               <div>
                 <div class="page-title-row">
                   <span class="project-key-tag">{{ currentProject.projectKey }}</span>
-                  <span class="project-type-tag">{{ formatProjectType(currentProject.projectType) }}</span>
                 </div>
                 <h1>{{ currentProject.name }}</h1>
                 <p v-if="currentProject.description">{{ currentProject.description }}</p>
@@ -1185,9 +1224,9 @@ onMounted(async () => {
             </div>
             <div class="overview-workbench cockpit-overview">
               <section class="surface work-status-panel"><div class="surface-heading"><div><h2>当前工作</h2></div><span class="surface-note">实施任务</span></div><div v-if="activeTasks.length" class="compact-feature-list"><button v-for="task in activeTasks.slice(0, 6)" :key="task.id" type="button" @click="openFeature(projectDetail.features.find(item => item.id === task.featureId)!)"><span><strong>{{ featureDisplayName(task.featureId) }} / {{ task.name }}</strong><small>{{ taskCategoryName(task.category) }} · {{ task.area || taskTypeName(task.type) }} · {{ taskStatusName(task.status) }}</small></span><span class="task-status" :data-status="task.status">{{ taskStatusName(task.status) }}</span></button></div><div v-else class="compact-empty">当前没有进行中的实施任务。</div></section>
-              <section class="surface attention-surface"><div class="surface-heading"><div><h2>需要我处理</h2></div><span class="surface-note">{{ attentionCount }} 项</span></div><div v-if="pendingReviews.length || submittedTasks.length" class="compact-feature-list"><button v-for="review in pendingReviews.slice(0, 5)" :key="review.id" type="button" @click="openPendingReview(review)"><span><strong>{{ reviewTargetName(review) }}</strong><small>{{ reviewSpecification(review)?.title }} · REV {{ revisionNumber(review.revisionId) ?? '—' }}</small></span><span class="review-badge pending">待设计评审</span></button><button v-for="task in submittedTasks.slice(0, Math.max(0, 5 - pendingReviews.length))" :key="task.id" type="button" @click="openFeature(projectDetail.features.find(item => item.id === task.featureId)!)"><span><strong>{{ runNumber(latestRun(task.id)!) }}</strong><small>{{ featureDisplayName(task.featureId) }} / {{ task.name }} · 等待确认</small></span><span class="task-status" data-status="SUBMITTED">待确认</span></button></div><div v-else class="compact-empty">当前没有待评审或待确认的任务。</div></section>
-              <section class="surface changes-surface"><div class="surface-heading"><div><h2>最近变化</h2></div><span class="surface-note">设计版本</span></div><div v-if="recentChanges.length" class="activity-list"><button v-for="activity in recentChanges.slice(0, 6)" :key="activity.id" type="button" @click="openOtherMaterial(activity.specification)"><span class="activity-mark">R{{ activity.revisionNo }}</span><span><strong>{{ kindName(activity.specification.kind) }} · {{ activity.specification.title }}</strong><small>{{ activity.changeSummary }} · {{ formatTime(activity.createdAt) }}</small></span><b>→</b></button></div><div v-else class="compact-empty">暂无版本变更记录。</div></section>
-              <section class="surface structure-status"><div class="surface-heading"><div><h2>工程设计完整度</h2></div><button class="text-button" type="button" @click="navigate('features')">查看工作台 →</button></div><div v-if="engineeringCompleteness.length" class="engineering-completeness"><article v-for="item in engineeringCompleteness" :key="item.feature.id"><strong>{{ item.feature.name }}</strong><div><span v-for="kind in item.kinds" :key="kind.kind" :class="{ complete: kind.exists }">{{ kind.label }} {{ kind.exists ? '✓' : '—' }}</span></div></article></div><div v-else class="compact-empty">尚未创建功能。</div></section>
+              <section class="surface attention-surface"><div class="surface-heading"><div><h2>需要我处理</h2></div><span class="surface-note">{{ attentionCount }} 项</span></div><div v-if="pendingReviews.length || submittedTasks.length" class="compact-feature-list"><button v-for="review in pendingReviews.slice(0, 5)" :key="review.id" type="button" @click="openPendingReview(review)"><span><strong>{{ reviewTargetName(review) }}</strong><small>{{ reviewSpecification(review)?.title }}</small></span><span class="review-badge pending">待设计评审</span></button><button v-for="task in submittedTasks.slice(0, Math.max(0, 5 - pendingReviews.length))" :key="task.id" type="button" @click="openFeature(projectDetail.features.find(item => item.id === task.featureId)!)"><span><strong>{{ runNumber(latestRun(task.id)!) }}</strong><small>{{ featureDisplayName(task.featureId) }} / {{ task.name }} · 等待确认</small></span><span class="task-status" data-status="SUBMITTED">待确认</span></button></div><div v-else class="compact-empty">当前没有待评审或待确认的任务。</div></section>
+              <section class="surface changes-surface"><div class="surface-heading"><div><h2>最近变化</h2></div><span class="surface-note">设计版本</span></div><div v-if="recentChanges.length" class="activity-list"><button v-for="activity in recentChanges.slice(0, 6)" :key="activity.id" type="button" @click="openOtherMaterial(activity.specification)"><span class="activity-mark" aria-hidden="true">↗</span><span><strong>{{ kindName(activity.specification.kind) }} · {{ activity.specification.title }}</strong><small>{{ activity.changeSummary }} · {{ formatTime(activity.createdAt) }}</small></span><b>→</b></button></div><div v-else class="compact-empty">暂无版本变更记录。</div></section>
+              <section class="surface structure-status"><div class="surface-heading"><div><h2>设计资料</h2></div><button class="text-button" type="button" @click="navigate('features')">查看工作台 →</button></div><div v-if="engineeringCompleteness.length" class="engineering-completeness"><article v-for="item in engineeringCompleteness" :key="item.feature.id"><strong>{{ item.feature.name }}</strong><div><span v-for="kind in item.kinds" :key="kind.kind" :class="{ complete: kind.exists }">{{ kind.label }} {{ kind.exists ? '✓' : '—' }}</span></div></article></div><div v-else class="compact-empty">尚未创建功能。</div></section>
             </div>
           </template>
 
@@ -1200,7 +1239,6 @@ onMounted(async () => {
             <div class="compact-page-heading document-page-heading">
               <div class="heading-title-group">
                 <h1>{{ activeDocumentPage === 'document' && currentSpecification ? currentSpecification.title : activeDocumentConfig.title }}</h1>
-                <span v-if="currentRevision" class="heading-badge">REV {{ currentRevision.revisionNo }}</span>
               </div>
               <div v-if="currentSpecification" class="document-actions">
                 <button class="primary-button" type="button" @click="startRevision">创建新版本</button>
@@ -1231,23 +1269,42 @@ onMounted(async () => {
 
           <template v-if="workspacePage === 'features'">
             <div class="compact-page-heading feature-page-heading"><div class="heading-title-group"><h1>功能清单</h1><span class="heading-badge">{{ projectDetail.features.length }} 项</span></div><button class="primary-button" type="button" @click="editModule()"><span>＋</span> 新建分组</button></div>
+            <div class="feature-toolbar"><input v-model="featureSearch" type="search" aria-label="搜索功能" placeholder="搜索功能名称" /><button type="button" :disabled="!!featureSearch.trim()" @click="setTreeExpanded(true)">全部展开</button><button type="button" :disabled="!!featureSearch.trim()" @click="setTreeExpanded(false)">全部收起</button></div>
             <section class="surface feature-tree">
-              <div class="feature-tree-head"><span>功能</span><span>能力</span><span>设计</span><span>实现</span><span>验证</span><span>操作</span></div>
-              <div v-for="module in projectDetail.modules" :key="module.id" class="module-group">
-                <div class="module-row"><button class="tree-toggle" type="button" @click="toggleModule(module.id)">{{ collapsedModules.has(module.id) ? '▸' : '▾' }}</button><div><strong>{{ module.name }}</strong><small>{{ featuresForModule(module.id).length }} 个功能<span v-if="module.description"> · {{ module.description }}</span></small></div><code>{{ module.code }}</code><div class="row-actions"><button type="button" @click="editFeature(module)">＋ 功能</button><button type="button" @click="editModule(module)">编辑</button><button type="button" class="danger-link-btn" @click.stop.prevent="confirmDeleteModule(module)">删除</button></div></div>
-                <div v-if="!collapsedModules.has(module.id)" class="module-features">
-                  <article v-for="feature in featuresForModule(module.id)" :key="feature.id" class="feature-row">
-                    <button class="feature-open" type="button" @click="openFeature(feature)"><span class="tree-branch">└</span><span class="feature-copy"><strong>{{ feature.name }}</strong><small>{{ feature.summary || feature.code }} · {{ statusName(feature.status) }}</small></span></button>
-                    <div class="feature-metric"><small>能力</small><strong>{{ capabilitiesForFeature(feature.id).length }}</strong></div>
-                    <div class="feature-metric"><small>设计</small><span>{{ featureDesignLabel(feature.id) }}</span></div>
-                    <div class="feature-metric"><small>实现</small><span>{{ featureImplementationLabel(feature.id) }}</span></div>
-                    <div class="feature-metric" :class="{ muted: featureVerificationLabel(feature.id) === '无证据' }"><small>验证</small><span>{{ featureVerificationLabel(feature.id) }}</span></div>
-                    <div class="row-actions feature-actions"><button type="button" @click="editFeature(module, feature)">编辑</button><button type="button" class="danger-link-btn" @click.prevent="confirmDeleteFeature(feature)">删除</button><button type="button" class="feature-view-button" @click="openFeature(feature)">查看</button></div>
-                  </article>
+              <div class="feature-tree-head"><span>功能</span><span>状态</span><span class="tree-verification">验证</span><span></span></div>
+              <div v-for="module in visibleModules" :key="module.id" class="module-group">
+                <div class="module-row">
+                  <button class="tree-toggle" type="button" :disabled="!!featureSearch.trim()" :aria-expanded="!!featureSearch.trim() || !collapsedModules.has(module.id)" :aria-label="`${collapsedModules.has(module.id) ? '展开' : '收起'}分组 ${module.name}`" @click="toggleModule(module.id)">{{ !featureSearch.trim() && collapsedModules.has(module.id) ? '▸' : '▾' }}</button>
+                  <div class="module-identity"><strong :title="module.name">{{ module.name }}</strong><small>{{ featuresForModule(module.id).length }}</small></div>
+                  <details class="tree-menu"><summary :aria-label="`${module.name}的操作`">···</summary><div class="tree-menu-items"><button type="button" @click="editFeature(module)">新建功能</button><button type="button" @click="editModule(module)">编辑分组</button><button type="button" class="danger-link-btn" @click.stop.prevent="confirmDeleteModule(module)">删除分组</button></div></details>
+                </div>
+                <div v-if="featureSearch.trim() || !collapsedModules.has(module.id)" class="module-features">
+                  <div v-for="feature in visibleFeatures(module)" :key="feature.id" class="feature-node">
+                    <article class="feature-row">
+                      <div class="feature-primary">
+                        <span class="tree-joint" aria-hidden="true"></span>
+                        <button v-if="capabilitiesForFeature(feature.id).length" class="tree-toggle feature-toggle" type="button" :disabled="!!featureSearch.trim()" :aria-expanded="!!featureSearch.trim() || !collapsedFeatures.has(feature.id)" :aria-label="`${collapsedFeatures.has(feature.id) ? '展开' : '收起'} ${feature.name}`" @click="toggleFeature(feature.id)">{{ !featureSearch.trim() && collapsedFeatures.has(feature.id) ? '▸' : '▾' }}</button>
+                        <span v-else class="tree-toggle-placeholder"></span>
+                        <button class="feature-open" type="button" :title="feature.name" @click="openFeature(feature)"><span class="feature-copy"><strong>{{ feature.name }}</strong></span></button>
+                      </div>
+                      <div class="feature-metric"><small>状态</small><span class="status-text" :data-status="feature.status">{{ statusName(feature.status) }}</span></div>
+                      <div class="feature-metric tree-verification" :class="{ muted: featureVerificationLabel(feature.id) === '无证据' }"><span>{{ featureVerificationLabel(feature.id) }}</span></div>
+                      <details class="tree-menu"><summary :aria-label="`${feature.name}的操作`">···</summary><div class="tree-menu-items"><button type="button" @click="editFeature(module, feature)">编辑功能</button><button type="button" class="danger-link-btn" @click.prevent="confirmDeleteFeature(feature)">删除功能</button></div></details>
+                    </article>
+                    <div v-if="capabilitiesForFeature(feature.id).length && (featureSearch.trim() || !collapsedFeatures.has(feature.id))" class="capability-list">
+                      <button v-for="capability in visibleCapabilities(module, feature)" :key="capability.id" class="capability-row" type="button" :title="capability.name" @click="openFeature(feature, capability.id)">
+                        <span class="capability-primary"><span class="capability-joint" aria-hidden="true"></span><span class="capability-copy"><strong>{{ capability.name }}</strong></span></span>
+                        <span class="feature-metric"><small>状态</small><span class="status-text" :data-status="capability.status">{{ capabilityStatusName(capability.status) }}</span></span>
+                        <span class="feature-metric tree-verification" :class="{ muted: capabilityVerificationLabel(capability.id) === '无证据' }"><span>{{ capabilityVerificationLabel(capability.id) }}</span></span>
+                        <span class="capability-enter" aria-hidden="true">→</span>
+                      </button>
+                    </div>
+                  </div>
                   <div v-if="!featuresForModule(module.id).length" class="tree-empty">该模块还没有功能。<button type="button" @click="editFeature(module)">新建第一个功能</button></div>
                 </div>
               </div>
               <div v-if="!projectDetail.modules.length" class="compact-empty">暂无模块<button class="primary-button" type="button" style="margin-left: 12px;" @click="editModule()">＋ 新建模块</button></div>
+              <div v-else-if="!visibleModules.length" class="compact-empty">没有匹配的功能<button type="button" @click="featureSearch = ''">清除搜索</button></div>
             </section>
           </template>
 
@@ -1255,6 +1312,7 @@ onMounted(async () => {
             <EngineeringWorkbench
               :project="currentProject"
               :feature="selectedFeature"
+              :initial-capability-id="selectedCapabilityId"
               :module-name="selectedModule?.name ?? '未分组'"
               :detail="projectDetail"
               @changed="refreshCurrentProject"
@@ -1262,9 +1320,10 @@ onMounted(async () => {
             />
           </template>
 
-           <template v-if="workspacePage === 'planning'"><div class="compact-page-heading"><div class="heading-title-group"><h1>开发计划</h1><span class="heading-badge">共 {{ projectDetail.features.length }} 项功能</span></div></div><section class="surface plan-board"><div class="plan-board-head"><span>功能 / 模块</span><span>设计版本</span><span>关联任务</span><span>状态</span></div><button v-for="feature in projectDetail.features" :key="feature.id" type="button" class="plan-board-row" @click="openFeature(feature)"><span class="plan-feature-cell"><strong>{{ feature.name }}</strong><code class="feature-code-badge">{{ feature.code }}</code></span><span class="plan-spec-cell"><span class="spec-status-badge">{{ projectDetail.project.workflowMode === 'AUTO' ? (projectDetail.specifications.find(item => item.featureId === feature.id)?.latestRevisionNumber ? `REV ${projectDetail.specifications.find(item => item.featureId === feature.id)?.latestRevisionNumber}` : '待设计') : (projectDetail.specifications.find(item => item.featureId === feature.id)?.approvedRevisionNumber ? `REV ${projectDetail.specifications.find(item => item.featureId === feature.id)?.approvedRevisionNumber}` : '待批准') }}</span></span><span class="plan-tasks-cell"><i v-for="task in tasksForFeature(feature.id)" :key="task.id" class="task-tag">{{ taskCategoryName(task.category) }}<b v-if="task.area"> / {{ task.area }}</b></i><em v-if="!tasksForFeature(feature.id).length" class="no-task">待规划</em></span><span class="plan-action-cell">{{ tasksForFeature(feature.id).length }} 项 <b>→</b></span></button><div v-if="!projectDetail.features.length" class="compact-empty">暂无功能</div></section></template>
+           <template v-if="workspacePage === 'planning'"><div class="compact-page-heading"><div class="heading-title-group"><h1>开发计划</h1><span class="heading-badge">共 {{ projectDetail.features.length }} 项功能</span></div></div><section class="surface plan-board"><div class="plan-board-head"><span>功能 / 模块</span><span>设计</span><span>关联任务</span><span>状态</span></div><button v-for="feature in projectDetail.features" :key="feature.id" type="button" class="plan-board-row" @click="openFeature(feature)"><span class="plan-feature-cell"><strong>{{ feature.name }}</strong></span><span class="plan-spec-cell"><span class="spec-status-badge">{{ projectDetail.project.workflowMode === 'AUTO' ? (projectDetail.specifications.find(item => item.featureId === feature.id)?.latestRevisionNumber ? '已记录' : '待设计') : (projectDetail.specifications.find(item => item.featureId === feature.id)?.approvedRevisionNumber ? '已批准' : '待批准') }}</span></span><span class="plan-tasks-cell"><i v-for="task in tasksForFeature(feature.id)" :key="task.id" class="task-tag">{{ taskCategoryName(task.category) }}<b v-if="task.area"> / {{ task.area }}</b></i><em v-if="!tasksForFeature(feature.id).length" class="no-task">待规划</em></span><span class="plan-action-cell">{{ tasksForFeature(feature.id).length }} 项 <b>→</b></span></button><div v-if="!projectDetail.features.length" class="compact-empty">暂无功能</div></section></template>
 
           <CapabilityProgress v-if="workspacePage === 'development'" :detail="projectDetail" mode="development" @open-feature="openFeature" />
+          <ProjectArchive v-if="workspacePage === 'archive' || workspacePage === 'records'" ref="archiveView" :key="projectDetail.project.id + workspacePage" :project-id="projectDetail.project.id" :initial-tab="workspacePage === 'records' ? 'records' : 'documents'" />
           <TestingWorkspace v-if="workspacePage === 'testing'" :detail="projectDetail" @open-feature="openFeature" />
           <template v-if="workspacePage === 'ai'">
             <div class="compact-page-heading"><div class="heading-title-group"><h1>执行记录</h1><span class="heading-badge">共 {{ sortedRuns.length }} 次运行</span></div></div>

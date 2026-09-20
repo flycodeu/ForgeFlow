@@ -77,6 +77,7 @@ test('MCP exposes scoped context tools and reuses the authorized Run state machi
   assert.equal(listed.statusCode, 200, listed.body);
   const toolNames = listed.json<{ result: { tools: { name: string }[] } }>().result.tools.map((item) => item.name);
   assert.deepEqual(toolNames.sort(), [
+    'list_project_archive', 'get_project_document', 'archive_project_document', 'record_project_work', 'list_project_work',
     'create_capability', 'create_capability_design', 'create_feature', 'create_feature_design', 'create_module', 'create_project_draft',
     'create_project_spec', 'create_spec_revision', 'create_task_plan', 'create_engineering_asset', 'create_engineering_asset_revision', 'create_trace_link',
     'resolve_project_and_sources', 'upsert_project_source', 'request_source_analysis', 'claim_source_analysis', 'submit_source_analysis',

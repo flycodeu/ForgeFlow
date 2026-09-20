@@ -40,7 +40,6 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
     <header class="compact-page-heading">
       <div class="heading-title-group">
         <h1>调研与分析</h1>
-        <span v-if="revision" class="heading-badge">REV {{ revision.revisionNo }}</span>
       </div>
       <button class="primary-button" type="button" @click="emit('create')">
         {{ revision ? '＋ 创建新版本' : '＋ 新建调研' }}
@@ -61,7 +60,6 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
           >
             <span>
               <strong>{{ item.name }}</strong>
-              <small>{{ item.source }}</small>
             </span>
             <em class="status-badge">{{ item.status }}</em>
           </button>
@@ -81,7 +79,7 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
           </div>
           <div>
             <dt>版本</dt>
-            <dd>REV {{ revision?.revisionNo ?? '—' }}</dd>
+            <dd>{{ revision?.revisionNo ?? '—' }}</dd>
           </div>
           <div>
             <dt>URL / 仓库</dt>
@@ -110,18 +108,19 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
 
 <style scoped>
 .research-workspace {
-  color: #0f172a;
+  container: research / inline-size;
+  color: var(--ink);
 }
 .research-layout {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
-  min-height: 600px;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 360px;
   overflow: hidden;
   border-radius: 12px;
 }
 .research-layout aside {
-  border-right: 1px solid #e2e8f0;
-  background: #f8fafc;
+  border-right: 1px solid var(--line);
+  background: var(--surface-subtle);
   display: flex;
   flex-direction: column;
 }
@@ -130,18 +129,18 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
   align-items: center;
   justify-content: space-between;
   padding: 14px 18px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--line);
 }
 .list-title strong {
   font-size: 13.5px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--ink);
 }
 .count-pill {
   padding: 2px 7px;
-  background: #e2e8f0;
+  background: var(--line);
   border-radius: 9999px;
-  color: #475569;
+  color: var(--ink-secondary);
   font-size: 11.5px;
   font-weight: 600;
 }
@@ -158,19 +157,19 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
   width: 100%;
   padding: 12px 18px;
   border: 0;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--surface-subtle);
   background: transparent;
-  color: #334155;
+  color: var(--ink-secondary);
   text-align: left;
   transition: all 0.12s;
   cursor: pointer;
 }
 .research-items-list button:hover {
-  background: #f1f5f9;
+  background: var(--surface-subtle);
 }
 .research-items-list button.active {
-  background: #ffffff;
-  border-left: 3px solid #2563eb;
+  background: var(--surface);
+  border-left: 3px solid var(--primary);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 .research-items-list button span {
@@ -182,17 +181,17 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
 .research-items-list button strong {
   font-size: 13.5px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--ink);
 }
 .research-items-list button small {
-  color: #64748b;
+  color: var(--muted);
   font-size: 12px;
 }
 .status-badge {
   padding: 2px 7px;
   border-radius: 4px;
-  background: #f1f5f9;
-  color: #64748b;
+  background: var(--surface-subtle);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 600;
   font-style: normal;
@@ -203,7 +202,7 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
 }
 article {
   padding: 28px 32px;
-  background: #ffffff;
+  background: var(--surface);
   overflow-y: auto;
 }
 .article-header {
@@ -212,13 +211,13 @@ article {
   justify-content: space-between;
   gap: 16px;
   padding-bottom: 16px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--line);
 }
 article h2 {
   margin: 0;
   font-size: 22px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--ink);
   letter-spacing: -0.01em;
 }
 .research-meta {
@@ -227,41 +226,44 @@ article h2 {
   gap: 12px;
   margin: 20px 0;
   padding: 14px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--surface-subtle);
 }
 .research-meta dt {
-  color: #64748b;
+  color: var(--muted);
   font-size: 12px;
 }
 .research-meta dd {
   margin: 4px 0 0;
   font-size: 13.5px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--ink);
   overflow-wrap: anywhere;
 }
 .research-meta dd a {
-  color: #2563eb;
+  color: var(--primary);
 }
 .research-findings h3 {
   font-size: 15px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--ink);
   margin: 24px 0 12px;
 }
 .finding-lines p {
-  color: #334155;
+  color: var(--ink-secondary);
   font-size: 14px;
   line-height: 1.7;
   margin: 0 0 10px;
 }
 .text-muted {
-  color: #94a3b8;
+  color: var(--muted-light);
 }
-@media (max-width: 800px) {
+@container research (max-width: 720px) {
   .research-layout { grid-template-columns: 1fr; }
-  .research-meta { grid-template-columns: 1fr; }
+  .research-layout aside { border-right: 0; border-bottom: 1px solid var(--line); }
+  .research-items-list { max-height: 150px; }
+  .research-meta { grid-template-columns: 1fr 1fr; }
+  .research-meta > div:last-child { grid-column: 1 / -1; }
 }
 </style>

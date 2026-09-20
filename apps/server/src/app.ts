@@ -11,6 +11,8 @@ import { registerWorkspaceRoutes } from './modules/workspace/workspace.routes.js
 import { WorkspaceService } from './modules/workspace/workspace.service.js';
 import { registerMcpRoutes } from './modules/mcp/mcp.routes.js';
 import { registerSystemRoutes } from './modules/system/system.routes.js';
+import { ArchiveService } from './modules/archive/archive.service.js';
+import { registerArchiveRoutes } from './modules/archive/archive.routes.js';
 
 export function createApp(databasePath?: string) {
   const connection = openDatabase(databasePath);
@@ -33,9 +35,11 @@ export function createApp(databasePath?: string) {
   });
   const auth = new AuthService(new AuthRepository(connection));
   const workspace = new WorkspaceService(new WorkspaceRepository(connection));
+  const archive = new ArchiveService(connection, workspace);
   registerAuthRoutes(app, auth);
   registerWorkspaceRoutes(app, workspace, auth);
-  registerMcpRoutes(app, workspace, auth);
+  registerMcpRoutes(app, workspace, auth, archive);
+  registerArchiveRoutes(app, archive, auth);
   registerSystemRoutes(app);
 
   app.addHook('onClose', async () => {
