@@ -9,7 +9,7 @@ import type { AiTokenSummary, CreatedAiToken, Project, SpecificationRevision, Sp
 import { createApp } from '../../app.js';
 
 test('Owner session and scoped AI Token persist and revoke without storing secrets', async (t) => {
-  const directory = mkdtempSync(join(tmpdir(), 'forgeflow-s1t04-'));
+  const directory = mkdtempSync(join(tmpdir(), 'forgeflow-auth-'));
   const path = join(directory, 'forgeflow.db');
   let app = createApp(path);
   t.after(async () => { await app.close(); rmSync(directory, { recursive: true, force: true }); });

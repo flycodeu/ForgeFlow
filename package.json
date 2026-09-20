@@ -13,8 +13,9 @@
     "typecheck": "pnpm -r typecheck",
     "build": "pnpm -r build",
     "start:server": "pnpm --filter @forgeflow/server start",
-    "db:generate": "drizzle-kit generate",
+    "db:generate": "node scripts/generate-migration.mjs",
     "db:migrate": "pnpm --filter @forgeflow/server db:migrate",
+    "seed:demo": "pnpm --filter @forgeflow/server seed:demo",
     "test": "pnpm --filter @forgeflow/server test"
   },
   "devDependencies": {

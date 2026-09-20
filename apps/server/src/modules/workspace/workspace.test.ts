@@ -7,7 +7,7 @@ import type { AiRun, CreatedAiToken, Feature, Module, Project, ProjectDetail, Sp
 import { createApp } from '../../app.js';
 
 test('Project and Specification revisions form a persistent, conflict-safe API flow', async (t) => {
-  const directory = mkdtempSync(join(tmpdir(), 'forgeflow-s1t03-'));
+  const directory = mkdtempSync(join(tmpdir(), 'forgeflow-workspace-'));
   let app = createApp(join(directory, 'forgeflow.db'));
   t.after(async () => {
     await app.close();
@@ -28,7 +28,7 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   const missingProject = await send({ method: 'GET', url: '/api/projects/missing' });
   assert.equal(missingProject.statusCode, 404);
 
-  const createdProject = await send({ method: 'POST', url: '/api/projects', payload: { projectKey: 'pa', name: '项目 A' } });
+  const createdProject = await send({ method: 'POST', url: '/api/projects', payload: { projectKey: 'pa', name: '项目 A', workflowMode: 'CONTROLLED' } });
   assert.equal(createdProject.statusCode, 201);
   const project = createdProject.json<Project>();
   assert.equal(project.projectKey, 'PA');
@@ -73,6 +73,20 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   assert.deepEqual(features.map((item) => item.id), [userFeature.id, departmentFeature.id]);
   assert.equal((await send({ method: 'GET', url: `${projectPath}/features/${departmentFeature.id}` })).json<Feature>().name, '部门管理');
 
+  const featureSpecResponse = await send({ method: 'POST', url: `${projectPath}/specifications`, payload: {
+    kind: 'feature-design', title: '部门管理功能设计', featureId: departmentFeature.id,
+  } });
+  assert.equal(featureSpecResponse.statusCode, 201);
+  const featureSpec = featureSpecResponse.json<SpecificationSummary>();
+  const featureSpecPath = `${projectPath}/specifications/${featureSpec.id}`;
+  const featureRevision1 = (await send({ method: 'POST', url: `${featureSpecPath}/revisions`, payload: {
+    content: '# 功能目标\n维护部门', changeSummary: '创建功能设计', expectedHeadRevisionId: null,
+  } })).json<SpecificationRevision>();
+  const baselineReview = (await send({ method: 'POST', url: `${featureSpecPath}/revisions/${featureRevision1.id}/reviews` })).json<{ id: string }>();
+  assert.equal((await send({ method: 'POST', url: `${projectPath}/reviews/${baselineReview.id}/decision`, payload: {
+    decision: 'APPROVED', comment: '可以作为实施基线',
+  } })).statusCode, 200);
+
   const tasksPath = `${projectPath}/features/${departmentFeature.id}/tasks`;
   const taskInputs = [
     { code: 'T01', name: '数据基础', type: 'OTHER', status: 'PLANNED', objective: '建立最小数据结构', sortOrder: 1 },
@@ -92,12 +106,12 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   } })).statusCode, 400);
   assert.equal((await send({ method: 'PATCH', url: `${tasksPath}/${createdTasks[1]!.id}`, payload: {
     status: 'BLOCKED',
-  } })).statusCode, 400);
+  } })).statusCode, 409);
   assert.equal((await send({ method: 'PATCH', url: `${tasksPath}/${createdTasks[0]!.id}`, payload: {
     status: 'CONFIRMED',
   } })).statusCode, 409);
   const confirmedBackend = (await send({ method: 'PATCH', url: `${tasksPath}/${createdTasks[1]!.id}`, payload: {
-    status: 'AUTHORIZED', sortOrder: 0, objective: '服务端接口已准备执行',
+    status: 'AUTHORIZED', sortOrder: 0, objective: '服务端接口已准备执行', designRevisionId: featureRevision1.id,
   } })).json<Task>();
   assert.equal(confirmedBackend.status, 'AUTHORIZED');
   assert.equal((await send({ method: 'GET', url: `${tasksPath}/${confirmedBackend.id}` })).json<Task>().objective, '服务端接口已准备执行');
@@ -146,7 +160,7 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   assert.equal(completedBackend.status, 'CONFIRMED');
 
   const failureTaskPath = `${tasksPath}/${createdTasks[2]!.id}`;
-  assert.equal((await send({ method: 'PATCH', url: failureTaskPath, payload: { status: 'AUTHORIZED' } })).json<Task>().status, 'AUTHORIZED');
+  assert.equal((await send({ method: 'PATCH', url: failureTaskPath, payload: { status: 'AUTHORIZED', designRevisionId: featureRevision1.id } })).json<Task>().status, 'AUTHORIZED');
   const failedAuthorization = (await send({ method: 'POST', url: `${failureTaskPath}/authorizations` })).json<TaskAuthorization>();
   const failedRun = (await send({ method: 'POST', url: `${failureTaskPath}/runs`, payload: {
     authorizationId: failedAuthorization.id, actorName: 'manual-test', baseCommit: null,
@@ -174,7 +188,7 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   assert.deepEqual(runHistory.filter((item) => item.taskId === createdTasks[2]!.id).map((item) => item.status), ['ABORTED', 'FAILED']);
 
   const returnTaskPath = `${tasksPath}/${createdTasks[3]!.id}`;
-  assert.equal((await send({ method: 'PATCH', url: returnTaskPath, payload: { status: 'AUTHORIZED' } })).json<Task>().status, 'AUTHORIZED');
+  assert.equal((await send({ method: 'PATCH', url: returnTaskPath, payload: { status: 'AUTHORIZED', designRevisionId: featureRevision1.id } })).json<Task>().status, 'AUTHORIZED');
   const returnAuthorization = (await send({ method: 'POST', url: `${returnTaskPath}/authorizations` })).json<TaskAuthorization>();
   const returnRun = (await send({ method: 'POST', url: `${returnTaskPath}/runs`, payload: {
     authorizationId: returnAuthorization.id, actorName: 'manual-test', baseCommit: null,
@@ -204,7 +218,7 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   const spec = createdSpec.json<SpecificationSummary>();
   assert.equal(spec.latestRevisionId, null);
   assert.equal(spec.featureId, null);
-  assert.equal((await send({ method: 'GET', url: projectPath })).json<ProjectDetail>().specifications.length, 1);
+  assert.equal((await send({ method: 'GET', url: projectPath })).json<ProjectDetail>().specifications.length, 2);
   const specPath = `${projectPath}/specifications/${spec.id}`;
 
   const first = await send({ method: 'POST', url: `${specPath}/revisions`, payload: {
@@ -238,19 +252,10 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   assert.equal(detail.specification.latestRevisionId, revision2.id);
   assert.equal(detail.latestRevision?.content, '# 第二版\n目标 B');
 
-  const featureSpecResponse = await send({ method: 'POST', url: `${projectPath}/specifications`, payload: {
-    kind: 'feature-design', title: '部门管理功能设计', featureId: departmentFeature.id,
-  } });
-  assert.equal(featureSpecResponse.statusCode, 201);
-  const featureSpec = featureSpecResponse.json<SpecificationSummary>();
   assert.equal(featureSpec.featureId, departmentFeature.id);
   assert.equal((await send({ method: 'POST', url: `${projectPath}/specifications`, payload: {
     kind: 'feature-design', title: '重复功能设计', featureId: departmentFeature.id,
   } })).statusCode, 409);
-  const featureSpecPath = `${projectPath}/specifications/${featureSpec.id}`;
-  const featureRevision1 = (await send({ method: 'POST', url: `${featureSpecPath}/revisions`, payload: {
-    content: '# 功能目标\n维护部门', changeSummary: '创建功能设计', expectedHeadRevisionId: null,
-  } })).json<SpecificationRevision>();
   const featureRevision2 = (await send({ method: 'POST', url: `${featureSpecPath}/revisions`, payload: {
     content: '# 功能目标\n维护部门层级\n\n## D-01 查看部门', changeSummary: '补充功能明细', expectedHeadRevisionId: featureRevision1.id,
   } })).json<SpecificationRevision>();

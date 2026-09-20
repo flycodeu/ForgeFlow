@@ -1,62 +1,115 @@
 # ForgeFlow
 
-ForgeFlow 是面向人和外部 AI 的研发控制台。当前实现 Project → Module → Feature → Task、Feature Design Revision，以及 Task Authorization → AI Run → 人工确认的最小执行控制闭环。当前 Run 仅由 REST 或 Web 验证入口驱动，不包含 MCP、Runner 或 Shell 执行。
+ForgeFlow 是一个面向外部 AI 编程工具的软件工程工作台。它把原本散落在聊天、Markdown、代码仓库和测试输出中的研发信息，组织为可浏览、可追踪、可继续执行的工程上下文。
 
-## 环境
+ForgeFlow 不内置模型，也不会扫描用户磁盘或启动任意 Shell。Codex、Claude Code 等外部工具通过 MCP 读取项目设计和源码绑定，在自己的工作环境中完成开发，再把结果写回 ForgeFlow。
 
-- Node.js 24 LTS（使用 `node --version` 确认当前终端为 v24）
-- pnpm 11.18.0
+## 核心模型
 
-## 开发
+```text
+项目
+├─ 模块
+│  └─ 功能
+│     ├─ 能力项
+│     └─ 工程设计
+├─ 源码绑定
+├─ 实施任务
+└─ AI 执行记录
+```
+
+- `Specification / Revision` 保存项目、功能和能力项的版本化设计。
+- `EngineeringAsset / Revision` 保存数据模型、接口、UI、Pipeline、算法和集成契约等工程设计。
+- `ProjectSource` 登记一个项目关联的多个 Git 仓库或普通目录，不把源码位置等同于业务模块。
+- `Task / Run` 记录实际实施过程；Run 会冻结当时采用的设计版本和多源码快照。
+- 默认工作流为 `AUTO`；已有 `CONTROLLED` 审查与授权数据继续兼容。
+
+## 技术栈
+
+- Node.js 24
+- pnpm 11
+- Fastify
+- Vue 3 + Vite
+- SQLite + Drizzle ORM
+- Model Context Protocol
+
+## 快速开始
 
 ```powershell
 pnpm install
 pnpm dev
 ```
 
-- Web：`http://127.0.0.1:5173`
-- API：`http://127.0.0.1:8787/api/health`
+- 工作台：<http://127.0.0.1:5173>
+- 健康检查：<http://127.0.0.1:8787/api/health>
 
-数据库默认位于 `data/forgeflow.db`，Server 启动时会先执行 `migrations/` 中尚未应用的正式迁移。启动或迁移失败会报错并退出。`/api/health` 返回数据库探测结果。
+必须从仓库根目录运行 `pnpm dev` 才会同时启动 Web 和 API。只运行 `pnpm dev:web` 时，页面无法访问后端。
+
+默认数据库为 `data/forgeflow.db`。可通过 `FORGEFLOW_DB_PATH` 指定隔离数据库：
 
 ```powershell
-pnpm db:generate # 修改 Drizzle schema 后生成待审阅的 SQL migration
-pnpm db:migrate  # 单独执行尚未应用的 migration
-pnpm test        # 使用临时 SQLite 文件验证迁移、业务与认证
+$env:FORGEFLOW_DB_PATH = 'D:\Temp\forgeflow-dev.db'
+pnpm dev
 ```
 
-本地验证可用 `FORGEFLOW_DB_PATH` 指定另一数据库文件；未设置时始终使用上述默认路径。`data/` 已被 Git 忽略。不要使用 schema 自动同步代替 migration。
+## 数据库结构
 
-Vite 将 `/api` 请求转发给本机 Fastify 服务。也可用 `pnpm dev:server` 和 `pnpm dev:web` 分别启动。
+`migrations/schema.sql` 是新安装使用的完整数据库基线，不再把开发阶段拆成一组随机命名的 SQL 文件。
 
-## 检查与构建
+```text
+migrations/
+├─ schema.sql                         # 当前完整结构
+├─ meta/
+│  ├─ _journal.json                  # Drizzle 迁移账本
+│  └─ schema_snapshot.json           # 当前 Drizzle 快照
+└─ legacy/
+   └─ pre-baseline-upgrade.sql       # 早期开发数据库的兼容升级
+```
+
+服务启动时自动初始化空数据库。早期预发布数据库会先走兼容升级，再登记为当前基线；Revision 和 EngineeringAsset 历史不会被覆盖。
+
+修改 `schema.ts` 后生成迁移时必须使用清晰名称，并审阅 SQL：
 
 ```powershell
+pnpm db:generate add_source_observation
+pnpm db:migrate
+```
+
+不要提交 Drizzle 自动生成的随机名称，也不要用 schema push 替代可审查的迁移。
+
+## Demo 数据
+
+正式启动不会自动写入 Demo。需要体验多类型工程设计时，显式执行：
+
+```powershell
+pnpm seed:demo
+```
+
+Demo Revision 的来源统一标记为 `demo-seed:*`，其中的 Commit、测试结果和源码路径只用于界面演示，不能作为真实项目证据。
+
+## 常用命令
+
+```powershell
+pnpm dev              # 同时启动 API 和 Web
+pnpm dev:server       # 仅启动 API
+pnpm dev:web          # 仅启动 Web
 pnpm typecheck
 pnpm build
-pnpm start:server
+pnpm test
+pnpm db:migrate
+pnpm seed:demo
 ```
 
-`pnpm start:server` 运行构建后的 API。开发时 Vite 将 `/api` 转发给本机 Server；当前 Web 构建产物尚未由 API 服务托管。
+测试使用临时 SQLite 文件，不会修改默认数据库。
 
-## 项目、功能与设计版本
+## 仓库结构
 
-打开 `http://127.0.0.1:5173/` 后直接进入本地项目列表，无需 Web 登录。进入项目后可维护模块与功能，并在 Feature 详情中创建版本化 Markdown 设计。项目级需求、架构、技术栈与 Feature 设计共用 `rd_spec` / `rd_spec_revision`：`feature_id` 为空表示项目级资料，非空表示 Feature 设计。历史 Revision 只读；创建新 Revision 时，API 要求 `expectedHeadRevisionId` 等于当前最新 Revision ID（初版为 `null`），旧页面提交会收到 409，Web 会保留草稿供对照。
+```text
+apps/
+├─ server/             # Fastify、数据库、MCP 与领域服务
+└─ web/                # Vue 工程工作台
+packages/
+└─ contracts/          # REST/MCP 共享契约
+migrations/            # 数据库基线和兼容升级
+```
 
-Module API：`GET/POST /api/projects/:projectId/modules`、`PATCH /api/projects/:projectId/modules/:moduleId`。Feature API：`GET/POST /api/projects/:projectId/features`（可用 `moduleId` 查询参数过滤）、`GET/PATCH /api/projects/:projectId/features/:featureId`。本阶段不提供删除接口。
-
-Task API：`GET/POST /api/projects/:projectId/features/:featureId/tasks`、`GET/PATCH /api/projects/:projectId/features/:featureId/tasks/:taskId`。Task 不会自动拆分，也不会自动推动 Feature 状态。普通编辑只允许 `PLANNED ↔ AUTHORIZED`；`RUNNING`、`SUBMITTED`、`CONFIRMED` 必须由执行闭环产生。开发进度中的实施列仅统计 `BACKEND`、`FRONTEND`、`INTEGRATION`、`OTHER`，验证列单独统计 `VERIFICATION`，统一显示 `CONFIRMED 数 / 总数`，不生成百分比。
-
-Authorization API：`GET/POST .../tasks/:taskId/authorizations`、`POST .../authorizations/:authorizationId/revoke`。批准、撤销、确认和退回只接受本地 Web 或 Owner Session 的人工操作；Bearer AI Token 无权伪造授权。同一 Task 同时最多一个 `ACTIVE` Authorization。
-
-Run API：`POST .../tasks/:taskId/runs`、`GET /api/projects/:projectId/runs`、`GET /api/projects/:projectId/runs/:runId`，以及 Run 的 `PATCH .../phase`、`POST .../submit|fail|abort`。启动时事务校验 Task、ACTIVE Authorization 和并行 Run；提交时原子更新 Run → `SUBMITTED`、Task → `SUBMITTED`、Authorization → `CONSUMED`。失败或中断保留历史并将 Task 返回 `AUTHORIZED`，重新运行前必须产生新授权。人工确认和退回分别使用 `POST .../tasks/:taskId/confirm|return`。
-
-Specification API 继续使用 `POST /api/projects/:projectId/specifications`、`GET /api/projects/:projectId/specifications/:specId`，以及该规格下的 `POST/GET .../revisions`、`GET .../revisions/:revisionId`。新 Revision 的 `source` 由服务端认证身份生成；旧数据中的 `api` 或 `unknown` 保留原值。
-
-## 认证
-
-ForgeFlow 当前仅监听 `127.0.0.1`，本地 Web 工作台不再以 Owner Session 作为访问前提。原 Owner Session、初始化和登录接口暂时保留用于兼容，已不再由 Web 入口调用；后续远程部署认证需单独设计和启用。
-
-本地用户可在 Web 的 Token 页面创建、列出和撤销 AI Token；API 对应 `POST/GET /api/ai-tokens`、`POST /api/ai-tokens/:tokenId/revoke`。明文只在创建响应中返回，之后只能看到名称、Scope 和时间。AI Client 使用 `Authorization: Bearer <token>`；三个独立 Scope 是 `project:read`、`spec:read`、`spec:write`，没有隐含继承。携带 Bearer Token 的请求仍严格校验 Scope，权限不足返回 403。
-
-设计蓝图目前保存在 `docs/blueprint/ai-rd-console-design-v1.1-node/docs/blueprint/`。
+`docs/`、`data/`、`dist/`、`.artifacts/`、`artifacts/`、IDE 配置和依赖目录均不进入版本库。评审记录、验收截图和过程性设计资料应保存在这些本地目录中，而不是提交到 Git。

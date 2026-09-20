@@ -9,14 +9,19 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "db:migrate": "tsx src/db/migrate.ts",
-    "test": "tsx --test src/db/client.test.ts src/modules/workspace/workspace.test.ts src/modules/security/auth.test.ts"
+    "seed:demo:projects": "tsx src/scripts/seed-demo-projects.ts",
+    "seed:demo": "pnpm seed:demo:projects && tsx src/scripts/seed-demo-engineering.ts",
+    "test": "tsx --test src/db/client.test.ts src/modules/workspace/workspace.test.ts src/modules/workspace/review.test.ts src/modules/workspace/design-guidance.test.ts src/modules/workspace/capability.test.ts src/modules/workspace/engineering-blueprint.test.ts src/modules/workspace/engineering-revision.test.ts src/modules/workspace/source-binding.test.ts src/modules/security/auth.test.ts src/modules/mcp/mcp.test.ts src/modules/mcp/planning.test.ts"
   },
   "dependencies": {
     "@fastify/cookie": "11.1.2",
     "@forgeflow/contracts": "workspace:*",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "better-sqlite3": "13.0.3",
     "drizzle-orm": "0.45.2",
-    "fastify": "5.12.5"
+    "fastify": "5.12.5",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "9.6.0",

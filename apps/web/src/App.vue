@@ -1,34 +1,26 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import type {
-  AiRun, AiScope, AiTokenSummary, ApiErrorResponse, CreatedAiToken, Feature, FeatureStatus, HealthResponse, Module, Project,
-  ProjectDetail, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary,
-  SpecificationSummary, Task, TaskAuthorization, TaskStatus, TaskType, RunPhase,
+  AiRun, AiScope, AiTokenSummary, CreatedAiToken, DesignReview, Feature, FeatureStatus, HealthResponse, Module, Project,
+  ProjectDetail, ProjectSourceKind, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary,
+  SpecificationSummary, TaskCategory, TaskStatus, TaskType, RunPhase,
 } from '@forgeflow/contracts';
+import CapabilityProgress from './components/CapabilityProgress.vue';
+import EngineeringWorkbench from './components/EngineeringWorkbench.vue';
+import ProjectLifecycleBar from './components/ProjectLifecycleBar.vue';
+import ResearchWorkspace from './components/ResearchWorkspace.vue';
+import SourceIntegration from './components/SourceIntegration.vue';
+import { api, ApiRequestError } from './api-client';
 import './app.css';
 
-type WorkspacePage = 'projects' | 'overview' | 'requirements' | 'architecture' | 'technology'
-  | 'features' | 'feature-detail' | 'development' | 'testing' | 'ai' | 'history' | 'document';
-type DocumentPage = 'requirements' | 'architecture' | 'technology' | 'document';
+type WorkspacePage = 'projects' | 'overview' | 'background' | 'research' | 'requirements' | 'architecture' | 'technology'
+  | 'sources' | 'features' | 'feature-detail' | 'planning' | 'development' | 'testing' | 'ai' | 'history' | 'document';
+type DocumentPage = 'background' | 'research' | 'requirements' | 'architecture' | 'technology' | 'document';
 type RevisionActivity = SpecificationRevisionSummary & { specification: SpecificationSummary };
-
-class ApiRequestError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
-}
-
-async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...options, credentials: 'same-origin',
-    headers: { ...(options?.body ? { 'Content-Type': 'application/json' } : {}), ...options?.headers },
-  });
-  if (response.status === 204) return undefined as T;
-  const result: T | ApiErrorResponse = await response.json();
-  if (!response.ok) {
-    const problem = result as ApiErrorResponse;
-    throw new ApiRequestError(response.status, problem.error?.message ?? `HTTP ${response.status}`);
-  }
-  return result as T;
-}
+type ProjectSourceDraft = {
+  clientId: string; alias: string; displayName: string; purpose: string; sourceKind: ProjectSourceKind;
+  environmentKey: string; localRoot: string; remoteUrl: string; repoSubdir: string;
+};
 
 const projects = ref<Project[]>([]);
 const projectCardMeta = ref<Record<string, { updatedAt: string }>>({});
@@ -40,17 +32,14 @@ const projectActivity = ref<RevisionActivity[]>([]);
 const selectedProjectId = ref<string | null>(null);
 const selectedSpecId = ref<string | null>(null);
 const selectedFeature = ref<Feature | null>(null);
-const featureTab = ref<'overview' | 'design' | 'plan' | 'history'>('overview');
 const collapsedModules = ref(new Set<string>());
-const expandedProgressFeatures = ref(new Set<string>());
 const workspacePage = ref<WorkspacePage>('projects');
 const documentMode = ref<'read' | 'edit'>('read');
 const showProjectDialog = ref(false);
 const showSpecDialog = ref(false);
 const showModuleDialog = ref(false);
 const showFeatureDialog = ref(false);
-const showTaskDialog = ref(false);
-const showRunSubmitDialog = ref(false);
+const showReviewDecisionDialog = ref(false);
 const mobileNavOpen = ref(false);
 const health = ref('连接中');
 const error = ref('');
@@ -58,6 +47,11 @@ const notice = ref('');
 const busy = ref(false);
 const projectKey = ref('');
 const projectName = ref('');
+const projectDescription = ref('');
+const projectType = ref('GENERAL');
+const projectSourceMode = ref<'existing' | 'later'>('later');
+const projectSources = ref<ProjectSourceDraft[]>([]);
+const expandedProjectSourceId = ref<string | null>(null);
 const specKind = ref('requirements');
 const specTitle = ref('');
 const editingModuleId = ref<string | null>(null);
@@ -72,38 +66,32 @@ const featureName = ref('');
 const featureSummary = ref('');
 const featureStatus = ref<FeatureStatus>('DRAFT');
 const featureSortOrder = ref(0);
-const editingTaskId = ref<string | null>(null);
-const taskCode = ref('');
-const taskName = ref('');
-const taskType = ref<TaskType>('OTHER');
-const taskStatus = ref<TaskStatus>('PLANNED');
-const taskObjective = ref('');
-const taskSortOrder = ref(0);
 const selectedRun = ref<AiRun | null>(null);
-const submittingRunId = ref<string | null>(null);
-const runSummary = ref('');
-const runResultCommit = ref('');
-const runChangedFiles = ref('');
-const runVerificationStatus = ref('PASS');
-const runVerificationSummary = ref('');
-const runIssues = ref('');
 const returnPageAfterCreate = ref<DocumentPage>('requirements');
 const draftContent = ref('');
 const draftSummary = ref('');
+const reviewDecisionComment = ref('');
+const reviewDiffVisible = ref(false);
+const diffBaseRevision = ref<SpecificationRevision | null>(null);
 const appView = ref<'loading' | 'workspace' | 'tokens'>('loading');
 const tokens = ref<AiTokenSummary[]>([]);
 const tokenName = ref('');
 const tokenScopes = ref<AiScope[]>([]);
 const revealedToken = ref('');
+const mcpUrl = import.meta.env.VITE_FORGEFLOW_MCP_URL ?? 'http://127.0.0.1:8787/mcp';
 
 const scopeOptions: { value: AiScope; label: string }[] = [
   { value: 'project:read', label: '读取项目' },
+  { value: 'project:write', label: '创建项目草稿' },
   { value: 'spec:read', label: '读取设计资料' },
   { value: 'spec:write', label: '写入设计资料与版本' },
+  { value: 'planning:write', label: '规划模块、功能与 Task' },
+  { value: 'task:read', label: '读取任务与授权' },
+  { value: 'run:write', label: '启动与提交 AI Run' },
 ];
 const kindNames: Record<string, string> = {
-  requirements: '需求分析', architecture: '架构设计', technology: '技术栈',
-  delivery: '交付与验证', other: '其他项目级资料', 'feature-design': '功能设计',
+  background: '项目背景', research: '调研与分析', requirements: '需求分析', architecture: '架构设计', technology: '技术选型',
+  delivery: '交付与验证', other: '其他项目级资料', 'feature-design': '功能 / 能力设计', 'capability-design': '能力项设计',
 };
 const featureStatuses: { value: FeatureStatus; label: string }[] = [
   { value: 'DRAFT', label: '草稿' }, { value: 'DESIGNING', label: '设计中' },
@@ -116,64 +104,106 @@ const taskTypes: { value: TaskType; label: string }[] = [
   { value: 'FRONTEND', label: 'Frontend' }, { value: 'INTEGRATION', label: '集成' },
   { value: 'VERIFICATION', label: '验证' }, { value: 'OTHER', label: '其他实施' },
 ];
+const taskCategories: { value: TaskCategory; label: string }[] = [
+  { value: 'DESIGN', label: '设计' }, { value: 'IMPLEMENTATION', label: '实现' }, { value: 'INTEGRATION', label: '集成' },
+  { value: 'VERIFICATION', label: '验证' }, { value: 'MIGRATION', label: '迁移' }, { value: 'CONTENT', label: '内容' }, { value: 'OTHER', label: '其他' },
+];
 const taskStatuses: { value: TaskStatus; label: string }[] = [
   { value: 'PLANNED', label: '待授权' }, { value: 'AUTHORIZED', label: '已授权' },
   { value: 'RUNNING', label: '进行中' }, { value: 'SUBMITTED', label: '已提交' },
   { value: 'CONFIRMED', label: '已确认' },
 ];
-const pageConfigs: Record<DocumentPage, { title: string; kind?: string; description: string; empty: string }> = {
-  requirements: { title: '需求分析', kind: 'requirements', description: '维护项目背景、目标、范围、核心需求、约束和未决问题。', empty: '当前还没有需求分析资料。' },
-  architecture: { title: '架构设计', kind: 'architecture', description: '记录系统架构、模块边界、数据流、部署方式与关键决策。', empty: '当前还没有架构设计资料。' },
-  technology: { title: '技术栈', kind: 'technology', description: '维护技术栈摘要、选型依据和详细技术说明。', empty: '当前还没有技术栈资料。' },
-  document: { title: '项目级资料', description: '查看其他项目级设计资料及其版本。', empty: '当前没有可查看的项目级资料。' },
+const pageConfigs: Record<DocumentPage, { title: string; kind?: string; empty: string }> = {
+  background: { title: '项目背景', kind: 'background', empty: '当前还没有项目背景资料。' },
+  research: { title: '调研与分析', kind: 'research', empty: '当前还没有调研与分析资料。' },
+  requirements: { title: '需求分析', kind: 'requirements', empty: '当前还没有需求分析资料。' },
+  architecture: { title: '架构设计', kind: 'architecture', empty: '当前还没有架构设计资料。' },
+  technology: { title: '技术选型', kind: 'technology', empty: '当前还没有技术选型资料。' },
+  document: { title: '项目级资料', empty: '当前没有可查看的项目级资料。' },
 };
-const navItems: { id: WorkspacePage; label: string; index?: string }[] = [
+const navItems: { id: WorkspacePage; label: string }[] = [
   { id: 'overview', label: '项目概览' },
-  { id: 'requirements', label: '需求分析', index: '01' },
-  { id: 'architecture', label: '架构设计', index: '02' },
-  { id: 'technology', label: '技术栈', index: '03' },
-  { id: 'features', label: '功能设计', index: '04' },
-  { id: 'development', label: '开发进度', index: '05' },
-  { id: 'testing', label: '测试与验收', index: '06' },
-  { id: 'ai', label: 'AI 执行记录', index: '07' },
-  { id: 'history', label: '版本与历史', index: '08' },
+  { id: 'background', label: '01 项目背景' },
+  { id: 'research', label: '02 调研与分析' },
+  { id: 'requirements', label: '03 需求分析' },
+  { id: 'architecture', label: '04 架构设计' },
+  { id: 'technology', label: '05 技术选型' },
+  { id: 'sources', label: '06 源码与集成' },
+  { id: 'features', label: '07 功能 / 能力设计' },
+  { id: 'planning', label: '08 开发计划' },
+  { id: 'development', label: '09 实施进度' },
+  { id: 'testing', label: '10 测试与验收' },
+  { id: 'ai', label: '11 AI 执行记录' },
+  { id: 'history', label: '12 版本与历史' },
 ];
 
 const currentProject = computed(() => projectDetail.value?.project ?? null);
 const currentSpecification = computed(() => specificationDetail.value?.specification ?? null);
 const currentRevision = computed(() => specificationDetail.value?.latestRevision ?? null);
+const approvedRevision = computed(() => specificationDetail.value?.approvedRevision ?? null);
+const currentRevisionReview = computed(() => specificationDetail.value?.reviews.find((item) => item.revisionId === currentRevision.value?.id) ?? null);
+const pendingReviews = computed(() => currentProject.value?.workflowMode === 'CONTROLLED'
+  ? projectDetail.value?.reviews.filter((item) => item.status === 'PENDING') ?? [] : []);
+const attentionCount = computed(() => submittedTasks.value.length + pendingReviews.value.length);
 const recentChanges = computed(() => projectActivity.value.slice(0, 8));
-const isDocumentPage = computed(() => ['requirements', 'architecture', 'technology', 'document'].includes(workspacePage.value));
+const lifecycleRefreshKey = computed(() => projectDetail.value ? [
+  ...projectDetail.value.capabilities.map((item) => `${item.id}:${item.status}:${item.updatedAt}`),
+  ...projectDetail.value.tasks.map((item) => `${item.id}:${item.status}:${item.updatedAt}`),
+  ...projectDetail.value.runs.map((item) => `${item.id}:${item.status}:${item.updatedAt}`),
+  ...projectDetail.value.specifications.map((item) => `${item.id}:${item.latestRevisionId ?? ''}`),
+].join('|') : '');
+const isDocumentPage = computed(() => ['background', 'research', 'requirements', 'architecture', 'technology', 'document'].includes(workspacePage.value));
 const activeDocumentPage = computed(() => (isDocumentPage.value ? workspacePage.value : 'document') as DocumentPage);
 const activeDocumentConfig = computed(() => pageConfigs[activeDocumentPage.value]);
 const latestProjectTime = computed(() => currentProject.value
   ? projectCardMeta.value[currentProject.value.id]?.updatedAt ?? currentProject.value.createdAt : null);
-const otherMaterials = computed(() => projectDetail.value?.specifications.filter((item) =>
-  item.featureId === null && !['requirements', 'architecture', 'technology'].includes(item.kind)) ?? []);
 const selectedModule = computed(() => projectDetail.value?.modules.find((item) => item.id === selectedFeature.value?.moduleId) ?? null);
-const featureSpecification = computed(() => projectDetail.value?.specifications.find((item) => item.featureId === selectedFeature.value?.id) ?? null);
-const featureStatusCounts = computed(() => featureStatuses.map((status) => ({
-  ...status, count: projectDetail.value?.features.filter((feature) => feature.status === status.value).length ?? 0,
-})).filter((status) => status.count > 0));
+const engineeringCompleteness = computed(() => {
+  const detail = projectDetail.value; if (!detail) return [];
+  const profiles = detail.project.designProfile.toLowerCase().split(/[,+;\s]+/).filter(Boolean);
+  const profileKinds: Record<string, string[]> = {
+    web: ['DATA_MODEL', 'CODE_MODEL', 'INTERFACE', 'UI_DESIGN', 'INTEGRATION', 'CONFIG', 'TEST_DESIGN'],
+    'backend-service': ['DATA_MODEL', 'CODE_MODEL', 'INTERFACE', 'INTEGRATION', 'CONFIG', 'DEPLOYMENT', 'TEST_DESIGN'],
+    game: ['CODE_MODEL', 'UI_DESIGN', 'INTEGRATION', 'CONFIG', 'TEST_DESIGN'],
+    ai: ['DATA_MODEL', 'CODE_MODEL', 'INTERFACE', 'ALGORITHM', 'INTEGRATION', 'CONFIG', 'DEPLOYMENT', 'TEST_DESIGN'],
+    pipeline: ['CODE_MODEL', 'INTERFACE', 'PIPELINE', 'INTEGRATION', 'CONFIG', 'DEPLOYMENT', 'TEST_DESIGN'],
+    'video-pipeline': ['CODE_MODEL', 'INTERFACE', 'PIPELINE', 'INTEGRATION', 'CONFIG', 'DEPLOYMENT', 'TEST_DESIGN'],
+  };
+  const required = [...new Set(profiles.flatMap((profile) => profileKinds[profile] ?? []))];
+  const labels: Record<string, string> = { DATA_MODEL: '数据', CODE_MODEL: '模型', INTERFACE: '契约', UI_DESIGN: 'UI', INTEGRATION: '集成', ALGORITHM: '算法', PIPELINE: 'Pipeline', CONFIG: '配置', DEPLOYMENT: '部署', TEST_DESIGN: '验证' };
+  return detail.features.map((feature) => {
+    const existing = new Set(detail.engineeringAssets.filter((item) => item.featureId === feature.id).map((item) => item.kind));
+    return { feature, kinds: required.map((kind) => ({ kind, label: labels[kind] ?? kind, exists: existing.has(kind) })) };
+  });
+});
 const sortedRuns = computed(() => [...(projectDetail.value?.runs ?? [])].sort((a, b) =>
   new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+const submittedTasks = computed(() => projectDetail.value?.tasks.filter((item) => item.status === 'SUBMITTED') ?? []);
+const activeTasks = computed(() => projectDetail.value?.tasks.filter((item) => currentProject.value?.workflowMode === 'AUTO'
+  ? ['PLANNED', 'RUNNING', 'BLOCKED'].includes(item.status)
+  : ['AUTHORIZED', 'RUNNING', 'SUBMITTED'].includes(item.status)) ?? []);
 const technologySummary = computed(() => {
   if (workspacePage.value !== 'technology' || !selectedRevision.value?.content) return [];
-  const labels: Record<string, string> = {
-    frontend: 'Frontend', '前端': 'Frontend', backend: 'Backend', '后端': 'Backend',
-    database: 'Database', '数据库': 'Database', 'ai integration': 'AI Integration', 'ai 集成': 'AI Integration',
-  };
-  const values = new Map<string, string[]>(); let current: string | null = null;
-  for (const line of selectedRevision.value.content.split(/\r?\n/)) {
-    const heading = /^#{1,4}\s+(.+)$/.exec(line.trim());
-    if (heading) { current = labels[heading[1].trim().toLowerCase()] ?? null; continue; }
-    if (!current || !line.trim()) continue;
-    const items = values.get(current) ?? [];
-    if (items.length < 3) items.push(line.trim().replace(/^[-*]\s+/, ''));
-    values.set(current, items);
+  const lines = selectedRevision.value.content.split(/\r?\n/);
+  const rows: Array<{ category: string; choice: string; purpose: string; reason: string; alternatives: string; status: string }> = [];
+  for (let index = 0; index < lines.length - 2; index += 1) {
+    const headers = lines[index]!.split('|').map((item) => item.trim()).filter(Boolean);
+    if (headers.length < 2 || !/类别|category/i.test(headers[0] ?? '') || !/选择|choice/i.test(headers[1] ?? '')) continue;
+    if (!/^\s*\|?[\s:|-]+\|/.test(lines[index + 1] ?? '')) continue;
+    for (let rowIndex = index + 2; rowIndex < lines.length && lines[rowIndex]!.includes('|'); rowIndex += 1) {
+      const cells = lines[rowIndex]!.split('|').map((item) => item.trim()).filter(Boolean);
+      if (cells.length >= 2) rows.push({ category: cells[0]!, choice: cells[1]!, purpose: cells[2] ?? '', reason: cells[3] ?? '', alternatives: cells[4] ?? '', status: cells[5] ?? '' });
+    }
+    break;
   }
-  return ['Frontend', 'Backend', 'Database', 'AI Integration']
-    .flatMap((label) => values.get(label)?.length ? [{ label, value: values.get(label)!.join(' · ') }] : []);
+  if (rows.length) return rows;
+  let current = ''; const summaries: typeof rows = [];
+  for (const line of lines) {
+    const heading = /^#{2,4}\s+(.+)$/.exec(line.trim());
+    if (heading) { current = heading[1]!.trim(); continue; }
+    if (current && line.trim() && summaries.length < 12) { summaries.push({ category: current, choice: line.trim().replace(/^[-*]\s+/, ''), purpose: '', reason: '', alternatives: '', status: '' }); current = ''; }
+  }
+  return summaries;
 });
 
 function kindName(kind: string) { return kindNames[kind] ?? kind; }
@@ -181,9 +211,30 @@ function statusName(status: FeatureStatus) { return featureStatuses.find((item) 
 function featuresForModule(moduleId: string) { return projectDetail.value?.features.filter((item) => item.moduleId === moduleId) ?? []; }
 function tasksForFeature(featureId: string) { return projectDetail.value?.tasks.filter((item) => item.featureId === featureId) ?? []; }
 function taskTypeName(type: TaskType) { return taskTypes.find((item) => item.value === type)?.label ?? type; }
+function taskCategoryName(category: TaskCategory) { return taskCategories.find((item) => item.value === category)?.label ?? category; }
 function taskStatusName(status: TaskStatus) { return taskStatuses.find((item) => item.value === status)?.label ?? status; }
-function authorizationsForTask(taskId: string) { return projectDetail.value?.authorizations.filter((item) => item.taskId === taskId) ?? []; }
-function activeAuthorization(taskId: string) { return authorizationsForTask(taskId).find((item) => item.status === 'ACTIVE') ?? null; }
+function reviewStatusName(status: DesignReview['status'] | null) {
+  return status ? ({ PENDING: '待评审', APPROVED: '已批准', CHANGES_REQUESTED: '要求修改', CANCELLED: '已取消' })[status] : '草稿';
+}
+function revisionNumber(revisionId: string | null) {
+  if (!revisionId) return null;
+  const projectSpecification = projectDetail.value?.specifications.find((item) =>
+    item.latestRevisionId === revisionId || item.approvedRevisionId === revisionId,
+  );
+  return revisions.value.find((item) => item.id === revisionId)?.revisionNo
+    ?? (currentRevision.value?.id === revisionId ? currentRevision.value.revisionNo : null)
+    ?? (approvedRevision.value?.id === revisionId ? approvedRevision.value.revisionNo : null)
+    ?? (projectSpecification?.latestRevisionId === revisionId ? projectSpecification.latestRevisionNumber : null)
+    ?? (projectSpecification?.approvedRevisionId === revisionId ? projectSpecification.approvedRevisionNumber : null);
+}
+function reviewSpecification(review: DesignReview) {
+  return projectDetail.value?.specifications.find((item) => item.id === review.specId) ?? null;
+}
+function reviewTargetName(review: DesignReview) {
+  const specification = reviewSpecification(review);
+  if (!specification) return '未知设计资料';
+  return specification.featureId ? featureDisplayName(specification.featureId) : kindName(specification.kind);
+}
 function runsForTask(taskId: string) { return sortedRuns.value.filter((item) => item.taskId === taskId); }
 function latestRun(taskId: string) { return runsForTask(taskId)[0] ?? null; }
 function runNumber(run: AiRun) {
@@ -191,21 +242,16 @@ function runNumber(run: AiRun) {
   return `RUN-${String(chronological.findIndex((item) => item.id === run.id) + 1).padStart(3, '0')}`;
 }
 function runStatusName(status: AiRun['status']) { return ({ RUNNING: '执行中', SUBMITTED: '已提交', FAILED: '失败', ABORTED: '已中断' })[status]; }
+function runFileLabel(file: AiRun['changedFiles'][number]) { return typeof file === 'string' ? file : `${file.sourceId.slice(0, 8)} · ${file.relativePath}`; }
+function verificationLabel(run: AiRun) {
+  const verification = run.verificationSummary;
+  if (!verification) return '—';
+  if (verification.origin === 'AI_REPORTED') return verification.reportedStatus === 'PASS' ? 'AI报告通过' : `AI报告${verification.reportedStatus}`;
+  return `${verification.reportedStatus} · ${verification.origin}`;
+}
 function runPhaseName(phase: RunPhase) { return ({ PREPARING: '准备', IMPLEMENTING: '实施', TESTING: '验证', SUBMITTING: '提交' })[phase]; }
 function featureDisplayName(featureId: string) { return projectDetail.value?.features.find((item) => item.id === featureId)?.name ?? '未知功能'; }
 function taskNameById(taskId: string) { return projectDetail.value?.tasks.find((item) => item.id === taskId)?.name ?? '未知 Task'; }
-function hasFeatureDesign(featureId: string) {
-  return Boolean(projectDetail.value?.specifications.find((item) => item.featureId === featureId)?.latestRevisionNumber);
-}
-function taskProgress(featureId: string, types: TaskType[], emptyLabel: string) {
-  const items = tasksForFeature(featureId).filter((item) => types.includes(item.type));
-  if (!items.length) return emptyLabel;
-  return `${items.filter((item) => item.status === 'CONFIRMED').length} / ${items.length}`;
-}
-function implementationProgress(featureId: string) {
-  return taskProgress(featureId, ['BACKEND', 'FRONTEND', 'INTEGRATION', 'OTHER'], '未拆分');
-}
-function verificationProgress(featureId: string) { return taskProgress(featureId, ['VERIFICATION'], '—'); }
 function formatTime(value: string) { return new Date(value).toLocaleString('zh-CN', { hour12: false }); }
 function formatDate(value: string) { return new Date(value).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
 function clearMessage() { error.value = ''; notice.value = ''; }
@@ -226,14 +272,28 @@ function inlineMarkdown(value: string) {
 }
 function renderMarkdown(markdown: string) {
   const output: string[] = []; let paragraph: string[] = []; let listType: 'ul' | 'ol' | null = null;
-  let inCode = false; let code: string[] = [];
+  let inCode = false; let code: string[] = []; let headingIndex = 0;
   const flush = () => { if (paragraph.length) output.push(`<p>${inlineMarkdown(paragraph.join(' '))}</p>`); paragraph = []; };
   const closeList = () => { if (listType) output.push(`</${listType}>`); listType = null; };
-  for (const line of markdown.replace(/\r\n/g, '\n').split('\n')) {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
     if (line.startsWith('```')) { flush(); closeList(); if (inCode) { output.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`); code = []; } inCode = !inCode; continue; }
     if (inCode) { code.push(line); continue; }
     const h = /^(#{1,4})\s+(.+)$/.exec(line); const ul = /^[-*]\s+(.+)$/.exec(line); const ol = /^\d+\.\s+(.+)$/.exec(line); const quote = /^>\s?(.+)$/.exec(line);
-    if (h) { flush(); closeList(); output.push(`<h${h[1].length}>${inlineMarkdown(h[2])}</h${h[1].length}>`); continue; }
+    if (h) { flush(); closeList(); headingIndex += 1; output.push(`<h${h[1].length} id="design-section-${headingIndex}">${inlineMarkdown(h[2])}</h${h[1].length}>`); continue; }
+    if (line.includes('|') && index + 1 < lines.length && /^\s*\|?[\s:|-]+\|/.test(lines[index + 1] ?? '')) {
+      flush(); closeList();
+      const headers = line.split('|').map((item) => item.trim()).filter(Boolean);
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length && lines[index]!.includes('|')) {
+        rows.push(lines[index]!.split('|').map((item) => item.trim()).filter(Boolean)); index += 1;
+      }
+      index -= 1;
+      output.push(`<div class="markdown-table-wrap"><table><thead><tr>${headers.map((item) => `<th>${inlineMarkdown(item)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((_, cell) => `<td>${inlineMarkdown(row[cell] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+      continue;
+    }
     if (ul || ol) { flush(); const next = ul ? 'ul' : 'ol'; if (listType !== next) { closeList(); listType = next; output.push(`<${next}>`); } output.push(`<li>${inlineMarkdown((ul ?? ol)![1])}</li>`); continue; }
     if (quote) { flush(); closeList(); output.push(`<blockquote>${inlineMarkdown(quote[1])}</blockquote>`); continue; }
     if (/^---+$/.test(line.trim())) { flush(); closeList(); output.push('<hr>'); continue; }
@@ -243,6 +303,34 @@ function renderMarkdown(markdown: string) {
   if (inCode) output.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
   flush(); closeList(); return output.join('');
 }
+
+const revisionDiff = computed(() => {
+  const before = (diffBaseRevision.value?.content ?? '').replace(/\r\n/g, '\n').split('\n');
+  const after = (currentRevision.value?.content ?? '').replace(/\r\n/g, '\n').split('\n');
+  const lcs = Array.from({ length: before.length + 1 }, () => new Uint16Array(after.length + 1));
+  for (let oldIndex = before.length - 1; oldIndex >= 0; oldIndex -= 1) {
+    for (let newIndex = after.length - 1; newIndex >= 0; newIndex -= 1) {
+      lcs[oldIndex]![newIndex] = before[oldIndex] === after[newIndex]
+        ? lcs[oldIndex + 1]![newIndex + 1]! + 1
+        : Math.max(lcs[oldIndex + 1]![newIndex]!, lcs[oldIndex]![newIndex + 1]!);
+    }
+  }
+  const lines: Array<{ kind: 'same' | 'removed' | 'added'; text: string; oldLine: number | null; newLine: number | null }> = [];
+  let oldIndex = 0; let newIndex = 0;
+  while (oldIndex < before.length || newIndex < after.length) {
+    if (oldIndex < before.length && newIndex < after.length && before[oldIndex] === after[newIndex]) {
+      lines.push({ kind: 'same', text: before[oldIndex]!, oldLine: oldIndex + 1, newLine: newIndex + 1 });
+      oldIndex += 1; newIndex += 1;
+    } else if (oldIndex < before.length && (newIndex >= after.length || lcs[oldIndex + 1]![newIndex]! >= lcs[oldIndex]![newIndex + 1]!)) {
+      lines.push({ kind: 'removed', text: before[oldIndex]!, oldLine: oldIndex + 1, newLine: null });
+      oldIndex += 1;
+    } else {
+      lines.push({ kind: 'added', text: after[newIndex]!, oldLine: null, newLine: newIndex + 1 });
+      newIndex += 1;
+    }
+  }
+  return lines;
+});
 
 async function collectActivity(detail: ProjectDetail) {
   const histories = await Promise.all(detail.specifications.map(async (specification) => {
@@ -281,6 +369,7 @@ async function loadSpecification(id: string) {
   const base = `/api/projects/${projectId}/specifications/${id}`;
   const [detail, history] = await Promise.all([api<SpecificationDetail>(base), api<SpecificationRevisionSummary[]>(`${base}/revisions`)]);
   selectedSpecId.value = id; specificationDetail.value = detail; revisions.value = history; selectedRevision.value = detail.latestRevision;
+  reviewDiffVisible.value = false; diffBaseRevision.value = null;
   draftContent.value = detail.latestRevision?.content ?? ''; draftSummary.value = '';
 }
 async function openDocumentPage(page: DocumentPage, preferredSpec?: SpecificationSummary) {
@@ -293,7 +382,7 @@ async function openDocumentPage(page: DocumentPage, preferredSpec?: Specificatio
 function showProjects() { clearMessage(); mobileNavOpen.value = false; void loadWorkspace().catch(showError); }
 function navigate(page: WorkspacePage) {
   clearMessage(); mobileNavOpen.value = false;
-  if (['requirements', 'architecture', 'technology'].includes(page)) { void openDocumentPage(page as DocumentPage); return; }
+  if (['background', 'research', 'requirements', 'architecture', 'technology'].includes(page)) { void openDocumentPage(page as DocumentPage); return; }
   workspacePage.value = page;
   if (page === 'ai' && !selectedRun.value) selectedRun.value = sortedRuns.value[0] ?? null;
 }
@@ -303,20 +392,17 @@ function openOtherMaterial(spec: SpecificationSummary) {
     if (feature) void openFeature(feature);
     return;
   }
-  const page = spec.kind === 'requirements' ? 'requirements'
-    : spec.kind === 'architecture' ? 'architecture'
-      : spec.kind === 'technology' ? 'technology' : 'document';
+  const page = spec.kind === 'background' ? 'background'
+    : spec.kind === 'research' ? 'research'
+      : spec.kind === 'requirements' ? 'requirements'
+        : spec.kind === 'architecture' ? 'architecture'
+          : spec.kind === 'technology' ? 'technology' : 'document';
   void openDocumentPage(page, spec);
 }
 function toggleModule(moduleId: string) {
   const next = new Set(collapsedModules.value);
   if (next.has(moduleId)) next.delete(moduleId); else next.add(moduleId);
   collapsedModules.value = next;
-}
-function toggleProgressFeature(featureId: string) {
-  const next = new Set(expandedProgressFeatures.value);
-  if (next.has(featureId)) next.delete(featureId); else next.add(featureId);
-  expandedProgressFeatures.value = next;
 }
 function editModule(module?: Module) {
   editingModuleId.value = module?.id ?? null; moduleCode.value = module?.code ?? ''; moduleName.value = module?.name ?? '';
@@ -351,98 +437,21 @@ async function saveFeature() {
     notice.value = editingFeatureId.value ? '功能信息已更新' : '功能已创建';
   } catch (cause) { showError(cause); } finally { busy.value = false; }
 }
-function editTask(task?: Task) {
-  const feature = selectedFeature.value; if (!feature) return;
-  editingTaskId.value = task?.id ?? null;
-  taskCode.value = task?.code ?? `T${String(tasksForFeature(feature.id).length + 1).padStart(2, '0')}`;
-  taskName.value = task?.name ?? '';
-  taskType.value = task?.type ?? 'OTHER';
-  taskStatus.value = task?.status ?? 'PLANNED';
-  taskObjective.value = task?.objective ?? '';
-  taskSortOrder.value = task?.sortOrder ?? tasksForFeature(feature.id).length;
-  showTaskDialog.value = true;
-}
-async function saveTask() {
-  const projectId = selectedProjectId.value; const feature = selectedFeature.value;
-  if (!projectId || !feature) return;
-  clearMessage(); busy.value = true;
-  try {
-    const body = JSON.stringify({ code: taskCode.value, name: taskName.value, type: taskType.value, status: taskStatus.value, objective: taskObjective.value, sortOrder: taskSortOrder.value });
-    const base = `/api/projects/${projectId}/features/${feature.id}/tasks`;
-    const path = editingTaskId.value ? `${base}/${editingTaskId.value}` : base;
-    await api<Task>(path, { method: editingTaskId.value ? 'PATCH' : 'POST', body });
-    showTaskDialog.value = false; await refreshCurrentProject();
-    notice.value = editingTaskId.value ? '任务已更新' : '任务已创建';
-  } catch (cause) { showError(cause); } finally { busy.value = false; }
-}
-async function taskAction<T>(action: () => Promise<T>, success: string) {
-  clearMessage(); busy.value = true;
-  try { await action(); await refreshCurrentProject(); notice.value = success; }
-  catch (cause) { showError(cause); } finally { busy.value = false; }
-}
-function taskBase(task: Task) { return `/api/projects/${task.projectId}/features/${task.featureId}/tasks/${task.id}`; }
-function prepareAuthorization(task: Task) {
-  void taskAction(() => api<Task>(taskBase(task), { method: 'PATCH', body: JSON.stringify({ status: 'AUTHORIZED' }) }), 'Task 已进入待执行状态');
-}
-function approveTask(task: Task) {
-  void taskAction(() => api<TaskAuthorization>(`${taskBase(task)}/authorizations`, { method: 'POST' }), '人工授权已生效');
-}
-function revokeTaskAuthorization(task: Task, authorization: TaskAuthorization) {
-  void taskAction(() => api<TaskAuthorization>(`${taskBase(task)}/authorizations/${authorization.id}/revoke`, { method: 'POST' }), '授权已撤销');
-}
-function startManualRun(task: Task, authorization: TaskAuthorization) {
-  void taskAction(() => api<AiRun>(`${taskBase(task)}/runs`, { method: 'POST', body: JSON.stringify({ authorizationId: authorization.id, actorName: 'manual-test', baseCommit: null }) }), '模拟 Run 已启动');
-}
-function advanceRun(run: AiRun) {
-  const phases: RunPhase[] = ['PREPARING', 'IMPLEMENTING', 'TESTING', 'SUBMITTING'];
-  const next = phases[Math.min(phases.indexOf(run.phase) + 1, phases.length - 1)]!;
-  void taskAction(() => api<AiRun>(`/api/projects/${run.projectId}/runs/${run.id}/phase`, { method: 'PATCH', body: JSON.stringify({ phase: next }) }), `Run 已进入${runPhaseName(next)}阶段`);
-}
-function openRunSubmit(run: AiRun) {
-  submittingRunId.value = run.id; runSummary.value = ''; runResultCommit.value = ''; runChangedFiles.value = '';
-  runVerificationStatus.value = 'PASS'; runVerificationSummary.value = ''; runIssues.value = ''; showRunSubmitDialog.value = true;
-}
-async function submitRun() {
-  const projectId = selectedProjectId.value; const runId = submittingRunId.value; if (!projectId || !runId) return;
-  await taskAction(() => api<AiRun>(`/api/projects/${projectId}/runs/${runId}/submit`, { method: 'POST', body: JSON.stringify({
-    summary: runSummary.value, resultCommit: runResultCommit.value.trim() || null,
-    changedFiles: runChangedFiles.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
-    verificationSummary: { status: runVerificationStatus.value, summary: runVerificationSummary.value },
-    issues: runIssues.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
-  }) }), 'Run 结果已提交，等待人工确认');
-  if (!error.value) showRunSubmitDialog.value = false;
-}
-function finishRun(run: AiRun, status: 'fail' | 'abort') {
-  const summary = status === 'fail' ? '开发验证标记为失败' : '人工中断本次 Run';
-  void taskAction(() => api<AiRun>(`/api/projects/${run.projectId}/runs/${run.id}/${status}`, { method: 'POST', body: JSON.stringify({ summary, issues: [] }) }), status === 'fail' ? 'Run 已标记失败，需要重新授权' : 'Run 已中断，需要重新授权');
-}
-function confirmTask(task: Task) { void taskAction(() => api<Task>(`${taskBase(task)}/confirm`, { method: 'POST' }), 'Task 已人工确认完成'); }
-function returnTask(task: Task) { void taskAction(() => api<Task>(`${taskBase(task)}/return`, { method: 'POST' }), 'Task 已退回，重新执行前需要再次授权'); }
 async function openFeature(feature: Feature) {
-  clearMessage(); selectedFeature.value = feature; workspacePage.value = 'feature-detail'; featureTab.value = 'overview'; documentMode.value = 'read'; mobileNavOpen.value = false;
-  const spec = projectDetail.value?.specifications.find((item) => item.featureId === feature.id);
-  if (!spec) { selectedSpecId.value = null; specificationDetail.value = null; revisions.value = []; selectedRevision.value = null; return; }
-  busy.value = true;
-  try { await loadSpecification(spec.id); } catch (cause) { showError(cause); } finally { busy.value = false; }
-}
-async function createFeatureDesign() {
-  const projectId = selectedProjectId.value; const feature = selectedFeature.value; if (!projectId || !feature) return;
-  clearMessage(); busy.value = true;
-  try {
-    let spec = featureSpecification.value;
-    if (!spec) {
-      spec = await api<SpecificationSummary>(`/api/projects/${projectId}/specifications`, { method: 'POST', body: JSON.stringify({ kind: 'feature-design', title: `${feature.name}功能设计`, featureId: feature.id }) });
-      await refreshCurrentProject();
-    }
-    await loadSpecification(spec.id); featureTab.value = 'design'; startRevision();
-    if (!currentRevision.value) {
-      draftContent.value = `# 功能目标\n\n# 范围\n\n# 不包含范围\n\n# 功能明细\n\n## D-01 \n\n# 业务规则\n\n# 异常与边界\n\n# 依赖\n\n# 数据/API影响\n\n# 验收条件\n\n# 未决问题\n`;
-    }
-  } catch (cause) { showError(cause); } finally { busy.value = false; }
+  clearMessage(); selectedFeature.value = feature; workspacePage.value = 'feature-detail'; documentMode.value = 'read'; mobileNavOpen.value = false;
+  selectedRun.value = sortedRuns.value.find((item) => item.featureId === feature.id) ?? null;
 }
 function prepareNewMaterial(page: DocumentPage) {
   const config = pageConfigs[page]; if (!config.kind) return;
   specKind.value = config.kind; specTitle.value = config.title; returnPageAfterCreate.value = page; showSpecDialog.value = true;
+}
+function initialDocumentTemplate(page: DocumentPage) {
+  if (page === 'background') return '# 项目背景\n\n# 服务对象\n\n# 项目目标\n\n# 成功标准\n\n# 约束\n\n# 不适用阶段与原因\n';
+  if (page === 'research') return '# 调研目标\n\n# 调研对象\n\n## 对象 1\n\n- 名称：\n- 类型：\n- 来源：\n- URL / Repository / Document：\n\n### 观察到的能力\n\n### 实现特点\n\n### 可借鉴点\n\n### 风险 / 不适用点\n\n# 对当前项目的影响\n\n## 采用什么\n\n## 不采用什么\n\n## 为什么\n\n## 待进一步确认\n';
+  if (page === 'technology') return '# Technology Decisions\n\n| 类别 | 选择 | 用途 | 原因 | 替代方案 | 状态 |\n| --- | --- | --- | --- | --- | --- |\n| Language |  |  |  |  | proposed |\n\n# 详细说明\n';
+  if (page === 'architecture') return '# 系统边界\n\n# Architecture Components\n\n# 数据流\n\n# 控制流\n\n# 依赖\n\n# 部署与运行方式\n\n# 关键约束\n';
+  if (page === 'requirements') return '# 目标\n\n# 使用场景\n\n# 需求\n\n# 约束\n\n# 验收条件\n\n# 未决事项\n';
+  return '';
 }
 function startRevision() { if (currentSpecification.value) { draftContent.value = currentRevision.value?.content ?? ''; draftSummary.value = ''; documentMode.value = 'edit'; } }
 function cancelRevision() { documentMode.value = 'read'; selectedRevision.value = currentRevision.value; }
@@ -452,11 +461,97 @@ async function selectHistory(revisionId: string) {
   try { selectedRevision.value = await api<SpecificationRevision>(`/api/projects/${projectId}/specifications/${specId}/revisions/${revisionId}`); }
   catch (cause) { showError(cause); }
 }
+async function showRevisionDiff() {
+  const projectId = selectedProjectId.value; const specId = selectedSpecId.value; const latest = currentRevision.value;
+  if (!projectId || !specId || !latest) return;
+  clearMessage(); busy.value = true;
+  try {
+    let base = approvedRevision.value;
+    if (!base) {
+      const previous = revisions.value.find((item) => item.revisionNo < latest.revisionNo);
+      base = previous ? await api<SpecificationRevision>(`/api/projects/${projectId}/specifications/${specId}/revisions/${previous.id}`) : null;
+    }
+    diffBaseRevision.value = base; reviewDiffVisible.value = true; documentMode.value = 'read'; selectedRevision.value = latest;
+  } catch (cause) { showError(cause); } finally { busy.value = false; }
+}
+async function submitDesignReview() {
+  const projectId = selectedProjectId.value; const specId = selectedSpecId.value; const latest = currentRevision.value;
+  if (!projectId || !specId || !latest) return;
+  clearMessage(); busy.value = true;
+  try {
+    await api<DesignReview>(`/api/projects/${projectId}/specifications/${specId}/revisions/${latest.id}/reviews`, { method: 'POST' });
+    await refreshCurrentProject(); await loadSpecification(specId); notice.value = `REV ${latest.revisionNo} 已提交人工评审`;
+  } catch (cause) { showError(cause); } finally { busy.value = false; }
+}
+async function approveDesignReview(review: DesignReview) {
+  const projectId = selectedProjectId.value; const specId = selectedSpecId.value; if (!projectId || !specId) return;
+  clearMessage(); busy.value = true;
+  try {
+    await api<DesignReview>(`/api/projects/${projectId}/reviews/${review.id}/decision`, { method: 'POST', body: JSON.stringify({ decision: 'APPROVED', comment: '批准为正式实施基线' }) });
+    await refreshCurrentProject(); await loadSpecification(specId); notice.value = '设计评审已批准，正式 Baseline 已更新';
+  } catch (cause) { showError(cause); } finally { busy.value = false; }
+}
+function requestDesignChanges() { reviewDecisionComment.value = ''; showReviewDecisionDialog.value = true; }
+async function submitChangeRequest() {
+  const projectId = selectedProjectId.value; const specId = selectedSpecId.value; const review = currentRevisionReview.value;
+  if (!projectId || !specId || !review) return;
+  clearMessage(); busy.value = true;
+  try {
+    await api<DesignReview>(`/api/projects/${projectId}/reviews/${review.id}/decision`, { method: 'POST', body: JSON.stringify({ decision: 'CHANGES_REQUESTED', comment: reviewDecisionComment.value }) });
+    showReviewDecisionDialog.value = false; await refreshCurrentProject(); await loadSpecification(specId); notice.value = '已要求修改；该版本保持只读，请创建新版本';
+  } catch (cause) { showError(cause); } finally { busy.value = false; }
+}
+async function openPendingReview(review: DesignReview) {
+  const spec = reviewSpecification(review); if (!spec) return;
+  if (spec.featureId) {
+    const feature = projectDetail.value?.features.find((item) => item.id === spec.featureId);
+    if (!feature) return;
+    await openFeature(feature);
+  } else {
+    const page = spec.kind === 'background' ? 'background' : spec.kind === 'research' ? 'research' : spec.kind === 'requirements' ? 'requirements' : spec.kind === 'architecture' ? 'architecture' : spec.kind === 'technology' ? 'technology' : 'document';
+    await openDocumentPage(page, spec);
+  }
+  await selectHistory(review.revisionId); await showRevisionDiff();
+}
+
+function newProjectSource(): ProjectSourceDraft {
+  return { clientId: crypto.randomUUID(), alias: '', displayName: '', purpose: '', sourceKind: 'GIT',
+    environmentKey: 'flycode-pc', localRoot: '', remoteUrl: '', repoSubdir: '' };
+}
+
+function openProjectDialog() {
+  projectSourceMode.value = 'later';
+  projectSources.value = [];
+  expandedProjectSourceId.value = null;
+  showProjectDialog.value = true;
+}
+
+function chooseProjectSourceMode(mode: 'existing' | 'later') {
+  projectSourceMode.value = mode;
+  if (mode === 'existing' && projectSources.value.length === 0) projectSources.value.push(newProjectSource());
+  expandedProjectSourceId.value = mode === 'existing' ? projectSources.value[0]?.clientId ?? null : null;
+}
+
+function addProjectSource() { const source = newProjectSource(); projectSources.value.push(source); expandedProjectSourceId.value = source.clientId; }
+function removeProjectSource(clientId: string) {
+  projectSources.value = projectSources.value.filter((source) => source.clientId !== clientId);
+  if (expandedProjectSourceId.value === clientId) expandedProjectSourceId.value = projectSources.value[0]?.clientId ?? null;
+}
+
 async function createProject() {
   clearMessage(); busy.value = true;
   try {
-    const project = await api<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ projectKey: projectKey.value, name: projectName.value }) });
-    projectKey.value = ''; projectName.value = ''; showProjectDialog.value = false; await loadWorkspace(); await selectProject(project.id); notice.value = '项目已创建';
+    const project = await api<Project>('/api/projects', { method: 'POST', body: JSON.stringify({
+      projectKey: projectKey.value, name: projectName.value, description: projectDescription.value, projectType: projectType.value,
+      sources: projectSourceMode.value === 'existing' ? projectSources.value.map((source) => ({
+        alias: source.alias, displayName: source.displayName, purpose: source.purpose, sourceKind: source.sourceKind,
+        environmentKey: source.environmentKey, localRoot: source.localRoot, remoteUrl: source.remoteUrl || null,
+        repoSubdir: source.repoSubdir || null, scope: null, idempotencyKey: `project-create-${source.clientId}`,
+      })) : [],
+    }) });
+    projectKey.value = ''; projectName.value = ''; projectDescription.value = ''; projectType.value = 'GENERAL';
+    projectSourceMode.value = 'later'; projectSources.value = []; expandedProjectSourceId.value = null; showProjectDialog.value = false;
+    await loadWorkspace(); await selectProject(project.id); notice.value = '项目已创建';
   } catch (cause) { showError(cause); } finally { busy.value = false; }
 }
 async function createSpecification() {
@@ -465,7 +560,8 @@ async function createSpecification() {
   try {
     const title = specTitle.value;
     const spec = await api<SpecificationSummary>(`/api/projects/${projectId}/specifications`, { method: 'POST', body: JSON.stringify({ kind: specKind.value, title }) });
-    showSpecDialog.value = false; await refreshCurrentProject(); await openDocumentPage(returnPageAfterCreate.value, spec); documentMode.value = 'edit'; notice.value = `${title}已创建，请添加初版内容`;
+    showSpecDialog.value = false; await refreshCurrentProject(); await openDocumentPage(returnPageAfterCreate.value, spec); documentMode.value = 'edit';
+    draftContent.value = initialDocumentTemplate(returnPageAfterCreate.value); notice.value = `${title}已创建，请添加初版内容`;
   } catch (cause) { showError(cause); } finally { busy.value = false; }
 }
 async function createRevision() {
@@ -474,7 +570,7 @@ async function createRevision() {
   clearMessage(); busy.value = true;
   try {
     const revision = await api<SpecificationRevision>(`/api/projects/${projectId}/specifications/${specId}/revisions`, { method: 'POST', body: JSON.stringify({ content: draftContent.value, changeSummary: draftSummary.value, expectedHeadRevisionId: detail.specification.latestRevisionId }) });
-    await refreshCurrentProject(); await loadSpecification(specId); documentMode.value = 'read'; notice.value = `Revision ${revision.revisionNo} 已保存`;
+    await refreshCurrentProject(); await loadSpecification(specId); documentMode.value = 'read'; notice.value = `REV ${revision.revisionNo} 已保存`;
   } catch (cause) {
     if (cause instanceof ApiRequestError && cause.status === 409) {
       const content = draftContent.value; const summary = draftSummary.value; await loadSpecification(specId);
@@ -502,7 +598,16 @@ async function revokeToken(id: string) {
 onMounted(async () => {
   try {
     const status = await api<HealthResponse>('/api/health'); health.value = status.status === 'ok' && status.database === 'ok' ? '服务正常' : '服务异常';
-    await loadWorkspace(); appView.value = 'workspace';
+    await loadWorkspace();
+    const query = new URLSearchParams(window.location.search);
+    const requestedProject = projects.value.find((item) => item.projectKey === query.get('project'));
+    if (requestedProject) {
+      await selectProject(requestedProject.id);
+      const requestedFeature = projectDetail.value?.features.find((item) => item.code === query.get('feature'));
+      if (requestedFeature) await openFeature(requestedFeature);
+      else if (query.get('view') && ['overview', 'research', 'requirements', 'architecture', 'technology', 'sources', 'features', 'planning', 'development', 'testing', 'ai', 'history'].includes(query.get('view')!)) navigate(query.get('view') as WorkspacePage);
+    }
+    appView.value = 'workspace';
   } catch (cause) { health.value = '连接失败'; appView.value = 'workspace'; showError(cause); }
 });
 </script>
@@ -520,40 +625,70 @@ onMounted(async () => {
 
     <main v-if="appView === 'tokens'" class="settings-page">
       <div class="page-heading settings-heading"><div><p class="eyebrow">LOCAL / AI ACCESS</p><h1>Token 与设置</h1><p>为外部 AI Client 分配最小必要权限。Web 本地访问不需要登录。</p></div><button class="secondary-button" type="button" @click="closeTokens">← 返回工作台</button></div>
-      <div class="settings-grid"><section class="surface settings-card"><div class="surface-heading"><div><span class="section-index">01</span><h2>创建 AI Token</h2></div></div><form class="form-stack" @submit.prevent="createToken"><label for="token-name">名称</label><input id="token-name" v-model="tokenName" maxlength="120" required /><span class="field-label">Scope</span><label v-for="scope in scopeOptions" :key="scope.value" class="scope-option"><input v-model="tokenScopes" type="checkbox" :value="scope.value" /><span>{{ scope.label }}</span><code>{{ scope.value }}</code></label><button class="primary-button" type="submit" :disabled="busy">创建 Token <span>→</span></button></form><div v-if="revealedToken" class="token-reveal"><strong>仅显示一次</strong><code>{{ revealedToken }}</code></div></section><section class="surface settings-card"><div class="surface-heading"><div><span class="section-index">02</span><h2>现有 Token</h2></div><span class="count-label">{{ tokens.length }}</span></div><div v-if="tokens.length"><div v-for="token in tokens" :key="token.id" class="token-row"><div><strong>{{ token.name }}</strong><small>{{ token.scopes.join(' · ') }}</small><small>创建于 {{ formatTime(token.createdAt) }}<template v-if="token.revokedAt"> · 已撤销</template></small></div><button v-if="!token.revokedAt" class="text-button danger" type="button" :disabled="busy" @click="revokeToken(token.id)">撤销</button></div></div><div v-else class="empty-state compact"><span>00</span><h3>尚未创建 Token</h3><p>Token 仅用于后续外部 AI 接入，不影响本地 Web 使用。</p></div></section></div>
+      <div class="settings-grid"><section class="surface settings-card"><div class="surface-heading"><div><span class="section-index">01</span><h2>创建 AI Token</h2></div></div><form class="form-stack" @submit.prevent="createToken"><label for="token-name">名称</label><input id="token-name" v-model="tokenName" maxlength="120" required /><span class="field-label">Scope</span><label v-for="scope in scopeOptions" :key="scope.value" class="scope-option"><input v-model="tokenScopes" type="checkbox" :value="scope.value" /><span>{{ scope.label }}</span><code>{{ scope.value }}</code></label><button class="primary-button" type="submit" :disabled="busy">创建 Token <span>→</span></button></form><div v-if="revealedToken" class="token-reveal"><strong>仅显示一次</strong><code>{{ revealedToken }}</code></div></section><section class="surface settings-card"><div class="surface-heading"><div><span class="section-index">02</span><h2>现有 Token</h2></div><span class="count-label">{{ tokens.length }}</span></div><div v-if="tokens.length"><div v-for="token in tokens" :key="token.id" class="token-row"><div><strong>{{ token.name }}</strong><small>{{ token.scopes.join(' · ') }}</small><small>创建于 {{ formatTime(token.createdAt) }}<template v-if="token.revokedAt"> · 已撤销</template></small></div><button v-if="!token.revokedAt" class="text-button danger" type="button" :disabled="busy" @click="revokeToken(token.id)">撤销</button></div></div><div v-else class="empty-state compact"><span>00</span><h3>尚未创建 Token</h3><p>Token 仅用于外部 AI 接入，不影响本地 Web 使用。</p></div></section></div>
+      <section class="surface mcp-guide"><div class="surface-heading"><div><span class="section-index">03</span><h2>MCP 接入说明</h2></div><span class="status-pill active">Streamable HTTP</span></div><div class="mcp-guide-body"><div><span class="field-label">MCP URL</span><code>{{ mcpUrl }}</code><p>使用上方创建的 Token，并至少授予客户端所调用 Tool 需要的 Scope。Token 明文仅在创建时显示一次。</p></div><div class="mcp-configs"><div><strong>Codex</strong><pre>codex mcp add forgeflow --url {{ mcpUrl }} --bearer-token-env-var FORGEFLOW_MCP_TOKEN</pre></div><div><strong>Claude Code（PowerShell）</strong><pre>claude mcp add --transport http forgeflow {{ mcpUrl }} --header "Authorization: Bearer $env:FORGEFLOW_MCP_TOKEN"</pre></div></div></div></section>
     </main>
 
     <template v-if="appView === 'workspace'">
       <main v-if="workspacePage === 'projects'" class="project-home">
-        <div class="project-home-heading"><div><p class="eyebrow">LOCAL WORKSPACE</p><h1>我的项目</h1><p>从项目进入需求、架构、技术栈、实施、测试与 AI 研发过程。</p></div><button class="primary-button" type="button" @click="showProjectDialog = true"><span>＋</span> 新建项目</button></div>
-        <section v-if="projects.length" class="project-card-grid"><button v-for="project in projects" :key="project.id" class="project-card" type="button" @click="selectProject(project.id)"><div class="project-card-top"><span class="project-avatar">{{ project.name.slice(0, 1).toUpperCase() }}</span><code>{{ project.projectKey }}</code><b>→</b></div><h2>{{ project.name }}</h2><p>暂无项目描述</p><dl><div><dt>创建时间</dt><dd>{{ formatDate(project.createdAt) }}</dd></div><div><dt>最近更新</dt><dd>{{ formatTime(projectCardMeta[project.id]?.updatedAt ?? project.createdAt) }}</dd></div></dl></button></section>
-        <section v-else class="surface empty-state project-empty"><span>00</span><h3>还没有项目</h3><p>创建第一个项目，开始组织真实的研发资料与过程。</p><button class="primary-button" type="button" @click="showProjectDialog = true"><span>＋</span> 新建项目</button></section>
+        <div class="project-home-heading"><div><h1>我的项目</h1></div><button class="primary-button" type="button" @click="openProjectDialog"><span>＋</span> 新建项目</button></div>
+        <section v-if="projects.length" class="project-card-grid"><button v-for="project in projects" :key="project.id" class="project-card" type="button" @click="selectProject(project.id)"><div class="project-card-top"><span class="project-avatar">{{ project.name.slice(0, 1).toUpperCase() }}</span><code>{{ project.projectKey }}</code><b>→</b></div><span class="project-type">{{ project.projectType }}</span><h2>{{ project.name }}</h2><p>{{ project.description || '暂无项目描述' }}</p><dl><div><dt>创建时间</dt><dd>{{ formatDate(project.createdAt) }}</dd></div><div><dt>最近更新</dt><dd>{{ formatTime(projectCardMeta[project.id]?.updatedAt ?? project.createdAt) }}</dd></div></dl></button></section>
+        <section v-else class="surface empty-state project-empty"><span>00</span><h3>还没有项目</h3><p>创建第一个项目，开始组织真实的研发资料与过程。</p><button class="primary-button" type="button" @click="openProjectDialog"><span>＋</span> 新建项目</button></section>
       </main>
 
       <div v-else-if="currentProject && projectDetail" class="console-layout">
-        <aside class="sidebar" :class="{ open: mobileNavOpen }"><nav class="primary-nav" aria-label="项目工作台"><button v-for="item in navItems" :key="item.id" class="nav-item" :class="{ active: workspacePage === item.id || (item.id === 'overview' && workspacePage === 'document') || (item.id === 'features' && workspacePage === 'feature-detail') }" type="button" @click="navigate(item.id)"><span class="nav-index">{{ item.index ?? '—' }}</span><span>{{ item.label }}</span></button></nav><div class="sidebar-footer"><span class="health-dot" :class="{ offline: health !== '服务正常' }"></span><div><strong>{{ health }}</strong><small>ForgeFlow Local</small></div></div></aside>
-        <main class="main-workspace"><button class="mobile-nav-toggle" type="button" @click="mobileNavOpen = !mobileNavOpen">☰ 项目导航</button>
+        <aside class="sidebar" :class="{ open: mobileNavOpen }">
+          <nav class="primary-nav" aria-label="项目工作台">
+            <div v-for="item in navItems" :key="item.id" class="nav-group">
+              <button class="nav-item" :class="{ active: workspacePage === item.id || (item.id === 'overview' && workspacePage === 'document') || (item.id === 'features' && workspacePage === 'feature-detail') }" type="button" @click="navigate(item.id)">
+                <span class="nav-marker"></span><span>{{ item.label }}</span><small v-if="item.id === 'features'">{{ projectDetail.features.length }}</small>
+              </button>
+              <div v-if="item.id === 'features' && projectDetail.modules.length" class="sidebar-feature-tree">
+                <div v-for="module in projectDetail.modules" :key="module.id" class="sidebar-module">
+                  <button type="button" @click="toggleModule(module.id)"><span>{{ collapsedModules.has(module.id) ? '▸' : '▾' }}</span><strong>{{ module.name }}</strong><small>{{ featuresForModule(module.id).length }}</small></button>
+                  <div v-if="!collapsedModules.has(module.id)" class="sidebar-features">
+                    <button v-for="feature in featuresForModule(module.id)" :key="feature.id" type="button" :class="{ active: selectedFeature?.id === feature.id && workspacePage === 'feature-detail' }" @click="openFeature(feature)"><span></span><strong>{{ feature.name }}</strong><i :data-status="feature.status"></i></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </nav>
+          <div class="sidebar-footer"><span class="health-dot" :class="{ offline: health !== '服务正常' }"></span><div><strong>{{ health }}</strong><small>ForgeFlow Local</small></div></div>
+        </aside>
+        <main class="main-workspace" :class="{ 'engineering-page': workspacePage === 'feature-detail' }"><button class="mobile-nav-toggle" type="button" @click="mobileNavOpen = !mobileNavOpen">☰ 项目导航</button>
+          <ProjectLifecycleBar v-if="workspacePage !== 'feature-detail'" :project-id="currentProject.id" :refresh-key="lifecycleRefreshKey" @navigate="navigate" />
           <template v-if="workspacePage === 'overview'">
-            <div class="compact-page-heading"><div><p class="eyebrow">{{ currentProject.projectKey }} / WORKSPACE</p><h1>项目概览</h1><p>{{ currentProject.name }}</p></div><div class="heading-meta"><span>创建于 {{ formatTime(currentProject.createdAt) }}</span><span>更新于 {{ latestProjectTime ? formatTime(latestProjectTime) : '—' }}</span></div></div>
-            <div class="overview-workbench">
-              <section class="surface project-structure-summary"><div class="surface-heading"><div><span class="section-index">01</span><h2>项目结构</h2></div><button class="text-button" type="button" @click="navigate('features')">查看功能设计 →</button></div><div class="metric-strip"><div><strong>{{ projectDetail.modules.length }}</strong><span>模块</span></div><div><strong>{{ projectDetail.features.length }}</strong><span>功能</span></div></div><div v-if="featureStatusCounts.length" class="status-distribution"><span v-for="status in featureStatusCounts" :key="status.value"><b>{{ status.count }}</b>{{ status.label }}</span></div><div v-else class="empty-inline"><span>尚未创建真实 Module / Feature</span></div></section>
-              <section class="surface lifecycle-panel"><div class="surface-heading"><div><span class="section-index">02</span><h2>研发入口</h2></div><span class="surface-note">基于真实数据</span></div><div class="lifecycle-list"><button type="button" @click="navigate('requirements')"><span>01</span><strong>需求分析</strong><small>{{ projectDetail.specifications.find(item => item.featureId === null && item.kind === 'requirements')?.latestRevisionNumber ? `REV ${projectDetail.specifications.find(item => item.featureId === null && item.kind === 'requirements')?.latestRevisionNumber}` : '尚无资料' }}</small><b>→</b></button><button type="button" @click="navigate('architecture')"><span>02</span><strong>架构设计</strong><small>{{ projectDetail.specifications.find(item => item.featureId === null && item.kind === 'architecture')?.latestRevisionNumber ? `REV ${projectDetail.specifications.find(item => item.featureId === null && item.kind === 'architecture')?.latestRevisionNumber}` : '尚无资料' }}</small><b>→</b></button><button type="button" @click="navigate('technology')"><span>03</span><strong>技术栈</strong><small>{{ projectDetail.specifications.find(item => item.featureId === null && item.kind === 'technology')?.latestRevisionNumber ? `REV ${projectDetail.specifications.find(item => item.featureId === null && item.kind === 'technology')?.latestRevisionNumber}` : '尚无资料' }}</small><b>→</b></button><button type="button" @click="navigate('features')"><span>04</span><strong>功能设计</strong><small>{{ projectDetail.modules.length }} 个模块 · {{ projectDetail.features.length }} 个功能</small><b>→</b></button><button type="button" @click="navigate('development')"><span>05</span><strong>开发进度</strong><small>{{ projectDetail.features.length ? '查看真实功能状态' : '暂无功能数据' }}</small><b>→</b></button></div></section>
-              <section class="surface work-status-panel"><div class="surface-heading"><div><span class="section-index">03</span><h2>当前工作</h2></div><span class="surface-note">{{ projectDetail.tasks.length }} 个 Task</span></div><div v-if="projectDetail.features.length" class="compact-feature-list"><button v-for="feature in projectDetail.features.slice(0, 5)" :key="feature.id" type="button" @click="openFeature(feature)"><span><strong>{{ feature.name }}</strong><small>{{ projectDetail.modules.find(item => item.id === feature.moduleId)?.name }} · 实施 {{ implementationProgress(feature.id) }}</small></span><span class="feature-status" :data-status="feature.status">{{ statusName(feature.status) }}</span></button></div><div v-else class="capability-empty"><span class="capability-mark">—</span><div><strong>暂无真实功能数据</strong><p>创建 Feature 与 Task 后，这里显示实际工作状态。</p></div></div></section>
-              <section class="surface attention-surface"><div class="surface-heading"><div><span class="section-index">04</span><h2>需要我处理</h2></div><span class="surface-note">{{ projectDetail.tasks.filter(item => item.status === 'SUBMITTED').length }} 待确认</span></div><div v-if="projectDetail.tasks.some(item => item.status === 'SUBMITTED')" class="compact-feature-list"><button v-for="task in projectDetail.tasks.filter(item => item.status === 'SUBMITTED').slice(0, 4)" :key="task.id" type="button" @click="openFeature(projectDetail.features.find(item => item.id === task.featureId)!); featureTab = 'plan'"><span><strong>{{ task.name }}</strong><small>{{ featureDisplayName(task.featureId) }} · Run 已提交</small></span><span class="task-status" data-status="SUBMITTED">待确认</span></button></div><div v-else class="capability-empty"><span class="capability-mark">—</span><div><strong>当前没有待确认的 Run</strong><p>Review 与 Acceptance 能力仍尚未开放。</p></div></div></section>
-              <section class="surface changes-surface"><div class="surface-heading"><div><span class="section-index">05</span><h2>最近变化</h2></div><span class="surface-note">真实 Revision</span></div><div v-if="recentChanges.length" class="activity-list"><button v-for="activity in recentChanges.slice(0, 5)" :key="activity.id" type="button" @click="openOtherMaterial(activity.specification)"><span class="activity-mark">R{{ activity.revisionNo }}</span><span><strong>{{ kindName(activity.specification.kind) }} · {{ activity.specification.title }}</strong><small>{{ activity.changeSummary }} · {{ formatTime(activity.createdAt) }}</small></span><b>→</b></button></div><div v-else class="empty-inline"><span>暂无真实版本变化</span></div></section>
-              <section v-if="otherMaterials.length" class="surface other-materials"><div class="surface-heading"><div><span class="section-index">06</span><h2>其他项目级资料</h2></div></div><div class="material-links"><button v-for="spec in otherMaterials" :key="spec.id" type="button" @click="openOtherMaterial(spec)"><span>§</span><strong>{{ spec.title }}</strong><small>{{ spec.latestRevisionNumber ? `REV ${spec.latestRevisionNumber}` : '尚无版本' }}</small><b>→</b></button></div></section>
+            <div class="compact-page-heading"><div><p class="eyebrow">{{ currentProject.projectKey }} / {{ currentProject.projectType }}</p><h1>项目概览</h1><p>{{ currentProject.name }}</p></div><div class="heading-meta"><span>创建于 {{ formatTime(currentProject.createdAt) }}</span><span>更新于 {{ latestProjectTime ? formatTime(latestProjectTime) : '—' }}</span></div></div>
+            <div class="overview-metrics" aria-label="项目真实数据概览">
+              <button type="button" @click="navigate('features')"><strong>{{ projectDetail.modules.length }}</strong><span>模块</span></button>
+              <button type="button" @click="navigate('features')"><strong>{{ projectDetail.features.length }}</strong><span>功能</span></button>
+              <button type="button" @click="navigate('development')"><strong>{{ activeTasks.length }}</strong><span>当前工作</span></button>
+              <button type="button"><strong>{{ attentionCount }}</strong><span>待我处理</span></button>
+            </div>
+            <div class="overview-workbench cockpit-overview">
+              <section class="surface work-status-panel"><div class="surface-heading"><div><h2>当前工作</h2></div><span class="surface-note">实施任务</span></div><div v-if="activeTasks.length" class="compact-feature-list"><button v-for="task in activeTasks.slice(0, 6)" :key="task.id" type="button" @click="openFeature(projectDetail.features.find(item => item.id === task.featureId)!)"><span><strong>{{ featureDisplayName(task.featureId) }} / {{ task.name }}</strong><small>{{ taskCategoryName(task.category) }} · {{ task.area || taskTypeName(task.type) }} · {{ taskStatusName(task.status) }}</small></span><span class="task-status" :data-status="task.status">{{ taskStatusName(task.status) }}</span></button></div><div v-else class="compact-empty">当前没有进行中的实施任务。</div></section>
+              <section class="surface attention-surface"><div class="surface-heading"><div><h2>需要我处理</h2></div><span class="surface-note">{{ attentionCount }} 项</span></div><div v-if="pendingReviews.length || submittedTasks.length" class="compact-feature-list"><button v-for="review in pendingReviews.slice(0, 5)" :key="review.id" type="button" @click="openPendingReview(review)"><span><strong>{{ reviewTargetName(review) }}</strong><small>{{ reviewSpecification(review)?.title }} · REV {{ revisionNumber(review.revisionId) ?? '—' }}</small></span><span class="review-badge pending">待设计评审</span></button><button v-for="task in submittedTasks.slice(0, Math.max(0, 5 - pendingReviews.length))" :key="task.id" type="button" @click="openFeature(projectDetail.features.find(item => item.id === task.featureId)!)"><span><strong>{{ runNumber(latestRun(task.id)!) }}</strong><small>{{ featureDisplayName(task.featureId) }} / {{ task.name }} · 等待确认</small></span><span class="task-status" data-status="SUBMITTED">待确认</span></button></div><div v-else class="compact-empty">当前没有待设计评审或待确认的 AI执行。</div></section>
+              <section class="surface changes-surface"><div class="surface-heading"><div><h2>最近变化</h2></div><span class="surface-note">设计版本</span></div><div v-if="recentChanges.length" class="activity-list"><button v-for="activity in recentChanges.slice(0, 6)" :key="activity.id" type="button" @click="openOtherMaterial(activity.specification)"><span class="activity-mark">R{{ activity.revisionNo }}</span><span><strong>{{ kindName(activity.specification.kind) }} · {{ activity.specification.title }}</strong><small>{{ activity.changeSummary }} · {{ formatTime(activity.createdAt) }}</small></span><b>→</b></button></div><div v-else class="compact-empty">暂无真实版本变化。</div></section>
+              <section class="surface structure-status"><div class="surface-heading"><div><h2>工程设计完整度</h2></div><button class="text-button" type="button" @click="navigate('features')">查看工作台 →</button></div><div v-if="engineeringCompleteness.length" class="engineering-completeness"><article v-for="item in engineeringCompleteness" :key="item.feature.id"><strong>{{ item.feature.name }}</strong><div><span v-for="kind in item.kinds" :key="kind.kind" :class="{ complete: kind.exists }">{{ kind.label }} {{ kind.exists ? '✓' : '—' }}</span></div></article></div><div v-else class="compact-empty">尚未创建功能。</div></section>
             </div>
           </template>
 
-          <template v-if="isDocumentPage">
-            <div class="compact-page-heading document-page-heading"><div><p class="eyebrow">{{ currentProject.projectKey }} / {{ activeDocumentPage.toUpperCase() }}</p><h1>{{ activeDocumentPage === 'document' && currentSpecification ? currentSpecification.title : activeDocumentConfig.title }}</h1><p>{{ activeDocumentConfig.description }}</p></div><div v-if="currentSpecification" class="document-actions"><button class="secondary-button" type="button" @click="documentMode = 'read'">查看历史版本</button><button class="primary-button" type="button" @click="startRevision">创建新版本</button></div></div>
-            <section v-if="!currentSpecification" class="surface document-empty-state"><span class="empty-code">NO DOCUMENT</span><h2>{{ activeDocumentConfig.empty }}</h2><p>这里不会生成示例内容或虚假版本。</p><button v-if="activeDocumentConfig.kind" class="primary-button" type="button" @click="prepareNewMaterial(activeDocumentPage)"><span>＋</span> 创建{{ activeDocumentConfig.title }}</button></section>
-            <div v-else-if="documentMode === 'read'" class="document-workbench"><article class="surface document-reader"><div class="document-statusbar"><div><span class="status-tag planning">草稿</span><strong>{{ selectedRevision ? `Revision ${selectedRevision.revisionNo}` : '尚无版本' }}</strong><span v-if="selectedRevision?.id === currentRevision?.id">当前版本</span><span v-else-if="selectedRevision">历史版本 · 只读</span></div><small v-if="selectedRevision">{{ sourceName(selectedRevision.source) }} · {{ formatTime(selectedRevision.createdAt) }}</small></div><section v-if="workspacePage === 'technology' && technologySummary.length" class="technology-summary"><div v-for="item in technologySummary" :key="item.label"><span>{{ item.label }}</span><strong>{{ item.value }}</strong></div></section><div v-if="selectedRevision" class="markdown-body" v-html="renderMarkdown(selectedRevision.content)"></div><div v-else class="empty-state document-empty"><span>R0</span><h3>尚未创建初版</h3><p>创建新版本后，Markdown 正文会在这里以阅读模式展示。</p><button class="primary-button" type="button" @click="startRevision">创建初版</button></div></article><aside class="surface version-rail"><div class="surface-heading"><div><span class="section-index">REV</span><h2>版本历史</h2></div><span class="count-label">{{ revisions.length }}</span></div><div v-if="revisions.length" class="revision-list"><button v-for="revision in revisions" :key="revision.id" type="button" :class="{ active: selectedRevision?.id === revision.id }" @click="selectHistory(revision.id)"><span class="revision-number">R{{ revision.revisionNo }}</span><span><strong>{{ revision.changeSummary }}</strong><small>{{ formatTime(revision.createdAt) }}</small></span><b>{{ revision.id === currentRevision?.id ? '当前' : '→' }}</b></button></div><div v-else class="empty-state compact"><span>R0</span><h3>暂无版本</h3></div></aside></div>
-            <div v-else class="revision-create-layout"><form class="surface revision-editor" @submit.prevent="createRevision"><div class="surface-heading"><div><span class="section-index">NEW</span><h2>创建新 Revision</h2></div><span class="surface-note">基于当前版本</span></div><div class="editor-fields"><label for="change-summary">变更摘要</label><input id="change-summary" v-model="draftSummary" maxlength="500" required placeholder="说明这次版本修改了什么" /><div class="field-row"><label for="markdown-content">Markdown 正文</label><span>{{ draftContent.length }} / 200000</span></div><textarea id="markdown-content" v-model="draftContent" maxlength="200000" required spellcheck="false"></textarea><div class="form-footer"><p>保存后形成不可变 Revision；历史版本保持只读。</p><div><button class="secondary-button" type="button" @click="cancelRevision">取消</button><button class="primary-button" type="submit" :disabled="busy">保存新 Revision <span>→</span></button></div></div></div></form><aside class="surface reference-panel"><div class="surface-heading"><div><span class="section-index">REF</span><h2>当前版本参考</h2></div></div><div class="reference-meta"><strong>{{ currentRevision ? `REV ${currentRevision.revisionNo}` : '尚无版本' }}</strong><span>{{ currentRevision?.changeSummary ?? '将创建初版' }}</span></div><pre>{{ currentRevision?.content ?? '当前没有可参考的版本正文。' }}</pre></aside></div>
+          <ResearchWorkspace v-if="workspacePage === 'research'" :specification="currentSpecification" :revision="selectedRevision" @create="currentSpecification ? startRevision() : prepareNewMaterial('research')" />
+
+          <SourceIntegration v-if="workspacePage === 'sources'" :project-id="currentProject.id" :sources="projectDetail.sources" :analyses="projectDetail.sourceAnalyses"
+            @refresh="refreshCurrentProject" @notice="notice = $event; error = ''" @error="error = $event; notice = ''" />
+
+          <template v-if="isDocumentPage && workspacePage !== 'research'">
+            <div class="compact-page-heading document-page-heading"><div><h1>{{ activeDocumentPage === 'document' && currentSpecification ? currentSpecification.title : activeDocumentConfig.title }}</h1><p v-if="currentRevision">当前版本 REV {{ currentRevision.revisionNo }} · 更新于 {{ formatTime(currentRevision.createdAt) }}</p></div><div v-if="currentSpecification" class="document-actions"><button class="primary-button" type="button" @click="startRevision">创建新版本</button></div></div>
+            <section v-if="!currentSpecification" class="surface document-empty-state"><h2>{{ activeDocumentConfig.empty }}</h2><button v-if="activeDocumentConfig.kind" class="primary-button" type="button" @click="prepareNewMaterial(activeDocumentPage)"><span>＋</span> 创建{{ activeDocumentConfig.title }}</button></section>
+            <section v-if="currentSpecification && currentRevision && currentProject.workflowMode === 'CONTROLLED'" class="baseline-bar" :class="{ warning: currentSpecification.latestRevisionId !== currentSpecification.approvedRevisionId }"><div class="baseline-facts"><span><small>当前正式版本</small><strong>{{ approvedRevision ? `REV ${approvedRevision.revisionNo}` : '尚未批准' }}</strong></span><span><small>最新版本</small><strong>REV {{ currentRevision.revisionNo }}</strong></span><span><small>状态</small><strong>{{ currentSpecification.latestRevisionId === currentSpecification.approvedRevisionId ? '已批准' : reviewStatusName(currentRevisionReview?.status ?? null) }}</strong></span></div><p v-if="currentSpecification.latestRevisionId !== currentSpecification.approvedRevisionId">存在未批准的新版本 REV {{ currentRevision.revisionNo }}，当前实施基线仍为 {{ approvedRevision ? `REV ${approvedRevision.revisionNo}` : '空' }}。</p><div class="baseline-actions"><button v-if="currentSpecification.latestRevisionId !== currentSpecification.approvedRevisionId" class="secondary-button" type="button" @click="showRevisionDiff">查看变更</button><button v-if="!currentRevisionReview" class="primary-button" type="button" :disabled="busy" @click="submitDesignReview">提交评审</button><template v-if="currentRevisionReview?.status === 'PENDING'"><button class="primary-button" type="button" :disabled="busy" @click="approveDesignReview(currentRevisionReview)">批准</button><button class="secondary-button" type="button" :disabled="busy" @click="requestDesignChanges">要求修改</button></template></div></section>
+            <section v-if="reviewDiffVisible && currentRevision" class="surface revision-diff"><div class="surface-heading"><div><span class="section-index">DIFF</span><h2>REV {{ currentRevision.revisionNo }} 变更</h2></div><span class="surface-note">对比 {{ diffBaseRevision ? `REV ${diffBaseRevision.revisionNo}` : '空内容' }}</span></div><div class="diff-legend"><span class="added">新增</span><span class="removed">删除</span><span>未变化</span></div><pre><span v-for="(line, index) in revisionDiff" :key="index" :class="`diff-line ${line.kind}`"><i>{{ line.oldLine ?? '' }}</i><i>{{ line.newLine ?? '' }}</i><b>{{ line.kind === 'added' ? '+' : line.kind === 'removed' ? '−' : ' ' }}</b><code>{{ line.text || ' ' }}</code></span></pre></section>
+            <div v-else-if="documentMode === 'read'" class="document-workbench"><article class="surface document-reader"><div class="document-statusbar"><div><span class="status-tag planning">草稿</span><strong>{{ selectedRevision ? `REV ${selectedRevision.revisionNo}` : '尚无版本' }}</strong><span v-if="selectedRevision?.id === currentRevision?.id">当前版本</span><span v-else-if="selectedRevision">历史版本 · 只读</span></div><small v-if="selectedRevision">{{ sourceName(selectedRevision.source) }} · {{ formatTime(selectedRevision.createdAt) }}</small></div><section v-if="workspacePage === 'technology' && technologySummary.length" class="technology-decisions-summary"><div class="technology-summary-head"><span>类别</span><span>选择</span><span>用途与原因</span><span>状态</span></div><div v-for="item in technologySummary" :key="`${item.category}-${item.choice}`" class="technology-decision"><span>{{ item.category }}</span><strong>{{ item.choice }}</strong><p>{{ [item.purpose, item.reason, item.alternatives && `替代：${item.alternatives}`].filter(Boolean).join(' · ') || '详细说明见正文' }}</p><b>{{ item.status || '—' }}</b></div></section><div v-if="selectedRevision" class="markdown-body" v-html="renderMarkdown(selectedRevision.content)"></div><div v-else class="empty-state document-empty"><span>R0</span><h3>尚未创建初版</h3><p>创建新版本后，Markdown 正文会在这里以阅读模式展示。</p><button class="primary-button" type="button" @click="startRevision">创建初版</button></div></article><aside class="surface version-rail"><div class="surface-heading"><div><span class="section-index">REV</span><h2>版本历史</h2></div><span class="count-label">{{ revisions.length }}</span></div><div v-if="revisions.length" class="revision-list"><button v-for="revision in revisions" :key="revision.id" type="button" :class="{ active: selectedRevision?.id === revision.id }" @click="selectHistory(revision.id)"><span class="revision-number">R{{ revision.revisionNo }}</span><span><strong>{{ revision.changeSummary }}</strong><small>{{ formatTime(revision.createdAt) }}</small></span><b>{{ revision.id === currentRevision?.id ? '当前' : '→' }}</b></button></div><div v-else class="empty-state compact"><span>R0</span><h3>暂无版本</h3></div></aside></div>
+            <div v-else class="revision-create-layout"><form class="surface revision-editor" @submit.prevent="createRevision"><div class="surface-heading"><div><h2>创建新版本</h2></div><span class="surface-note">基于当前版本</span></div><div class="editor-fields"><label for="change-summary">变更摘要</label><input id="change-summary" v-model="draftSummary" maxlength="500" required placeholder="说明这次版本修改了什么" /><div class="field-row"><label for="markdown-content">Markdown 正文</label><span>{{ draftContent.length }} / 200000</span></div><textarea id="markdown-content" v-model="draftContent" maxlength="200000" required spellcheck="false"></textarea><div class="form-footer"><p>保存后形成不可变版本；历史版本保持只读。</p><div><button class="secondary-button" type="button" @click="cancelRevision">取消</button><button class="primary-button" type="submit" :disabled="busy">保存新版本 <span>→</span></button></div></div></div></form><aside class="surface reference-panel"><div class="surface-heading"><div><h2>当前版本参考</h2></div></div><div class="reference-meta"><strong>{{ currentRevision ? `REV ${currentRevision.revisionNo}` : '尚无版本' }}</strong><span>{{ currentRevision?.changeSummary ?? '将创建初版' }}</span></div><pre>{{ currentRevision?.content ?? '当前没有可参考的版本正文。' }}</pre></aside></div>
           </template>
 
           <template v-if="workspacePage === 'features'">
-            <div class="compact-page-heading"><div><p class="eyebrow">04 / FEATURE DESIGN</p><h1>功能设计</h1><p>按模块维护真实功能与版本化设计资料。</p></div><button class="primary-button" type="button" @click="editModule()"><span>＋</span> 新建模块</button></div>
+            <div class="compact-page-heading"><div><h1>功能 / 能力设计</h1></div><button class="primary-button" type="button" @click="editModule()"><span>＋</span> 新建模块</button></div>
             <section class="surface feature-tree">
               <div class="feature-tree-head"><span>模块 / 功能</span><span>编号</span><span>状态</span><span>排序</span><span>操作</span></div>
               <div v-for="module in projectDetail.modules" :key="module.id" class="module-group">
@@ -568,76 +703,73 @@ onMounted(async () => {
           </template>
 
           <template v-if="workspacePage === 'feature-detail' && selectedFeature">
-            <div class="feature-detail-heading"><button class="back-link" type="button" @click="navigate('features')">← 功能设计</button><div class="compact-page-heading"><div><p class="eyebrow">{{ selectedModule?.code }} / {{ selectedFeature.code }}</p><h1>{{ selectedFeature.name }}</h1><p>{{ selectedFeature.summary || '暂无功能摘要' }}</p></div><span class="feature-status large" :data-status="selectedFeature.status">{{ statusName(selectedFeature.status) }}</span></div></div>
-            <nav class="detail-tabs" aria-label="功能详情"><button :class="{ active: featureTab === 'overview' }" type="button" @click="featureTab = 'overview'; documentMode = 'read'">概览</button><button :class="{ active: featureTab === 'design' }" type="button" @click="featureTab = 'design'; documentMode = 'read'; selectedRevision = currentRevision">功能设计</button><button :class="{ active: featureTab === 'plan' }" type="button" @click="featureTab = 'plan'; documentMode = 'read'">实施计划</button><button :class="{ active: featureTab === 'history' }" type="button" @click="featureTab = 'history'; documentMode = 'read'">版本历史</button></nav>
-            <section v-if="featureTab === 'overview'" class="feature-overview-grid"><div class="surface feature-facts"><div class="surface-heading"><div><span class="section-index">INFO</span><h2>功能信息</h2></div><button class="text-button" type="button" @click="selectedModule && editFeature(selectedModule, selectedFeature)">编辑</button></div><dl><div><dt>功能名称</dt><dd>{{ selectedFeature.name }}</dd></div><div><dt>编号</dt><dd><code>{{ selectedFeature.code }}</code></dd></div><div><dt>所属模块</dt><dd>{{ selectedModule?.name ?? '—' }}</dd></div><div><dt>状态</dt><dd>{{ statusName(selectedFeature.status) }}</dd></div><div><dt>摘要</dt><dd>{{ selectedFeature.summary || '—' }}</dd></div><div><dt>创建时间</dt><dd>{{ formatTime(selectedFeature.createdAt) }}</dd></div><div><dt>更新时间</dt><dd>{{ formatTime(selectedFeature.updatedAt) }}</dd></div></dl></div><div class="surface design-status"><div class="surface-heading"><div><span class="section-index">DESIGN</span><h2>设计状态</h2></div></div><template v-if="currentRevision"><strong class="current-design">REV {{ currentRevision.revisionNo }}</strong><span>最近修改：{{ formatTime(currentRevision.createdAt) }}</span><button class="primary-button" type="button" @click="featureTab = 'design'; documentMode = 'read'">查看当前设计 →</button></template><template v-else><strong>尚未创建功能设计</strong><p>设计正文将复用统一的 Specification / Revision 版本机制。</p><button class="primary-button" type="button" @click="createFeatureDesign">创建第一版设计</button></template></div></section>
-            <template v-if="featureTab === 'design'">
-              <div class="feature-design-actions"><div><span>当前设计</span><strong>{{ currentRevision ? `REV ${currentRevision.revisionNo}` : '尚无版本' }}</strong></div><button class="primary-button" type="button" @click="createFeatureDesign">{{ currentRevision ? '创建新版本' : '创建第一版设计' }}</button></div>
-              <article v-if="documentMode === 'read'" class="surface feature-design-reader"><div v-if="selectedRevision" class="document-statusbar"><div><span class="status-tag planning">{{ selectedRevision.id === currentRevision?.id ? '当前版本' : '历史版本 · 只读' }}</span><strong>Revision {{ selectedRevision.revisionNo }}</strong></div><small>{{ formatTime(selectedRevision.createdAt) }}</small></div><div v-if="selectedRevision" class="markdown-body" v-html="renderMarkdown(selectedRevision.content)"></div><div v-else class="empty-state document-empty"><span>R0</span><h3>尚未创建功能设计</h3><p>创建首个 Revision 后会默认以阅读模式展示。</p></div></article>
-              <div v-else class="revision-create-layout"><form class="surface revision-editor" @submit.prevent="createRevision"><div class="surface-heading"><div><span class="section-index">NEW</span><h2>创建功能设计 Revision</h2></div><span class="surface-note">历史版本不可覆盖</span></div><div class="editor-fields"><label for="feature-change-summary">变更摘要</label><input id="feature-change-summary" v-model="draftSummary" maxlength="500" required /><div class="field-row"><label for="feature-markdown-content">Markdown 正文</label><span>{{ draftContent.length }} / 200000</span></div><textarea id="feature-markdown-content" v-model="draftContent" maxlength="200000" required spellcheck="false"></textarea><div class="form-footer"><p>保存时提交 expectedHeadRevisionId，并形成不可变新版本。</p><div><button class="secondary-button" type="button" @click="cancelRevision">取消</button><button class="primary-button" type="submit" :disabled="busy">保存新 Revision →</button></div></div></div></form><aside class="surface reference-panel"><div class="surface-heading"><div><span class="section-index">REF</span><h2>当前版本参考</h2></div></div><pre>{{ currentRevision?.content ?? '当前没有可参考的版本正文。' }}</pre></aside></div>
-            </template>
-            <section v-if="featureTab === 'plan'" class="surface task-plan">
-              <div class="surface-heading"><div><span class="section-index">TASK</span><h2>实施计划</h2></div><button class="primary-button" type="button" @click="editTask()">＋ 新建 Task</button></div>
-              <div class="task-list-head"><span>排序 / 编号</span><span>任务</span><span>类型</span><span>状态</span><span>操作</span></div>
-              <div v-if="tasksForFeature(selectedFeature.id).length" class="task-list execution-list">
-                <article v-for="task in tasksForFeature(selectedFeature.id)" :key="task.id" class="task-entry">
-                  <div class="task-row execution-row">
-                    <span><b>{{ String(task.sortOrder).padStart(2, '0') }}</b><code>{{ task.code }}</code></span>
-                    <span><strong>{{ task.name }}</strong><small>{{ task.objective || '未填写任务目标' }}</small></span>
-                    <span>{{ taskTypeName(task.type) }}</span>
-                    <span class="task-status" :data-status="task.status">{{ taskStatusName(task.status) }}<small>{{ task.status }}</small></span>
-                    <button class="text-button" type="button" @click="editTask(task)">编辑</button>
-                  </div>
-                  <div class="execution-control">
-                    <template v-if="task.status === 'PLANNED'">
-                      <p><strong>等待人工授权</strong><span>批准前不能启动 Run。</span></p>
-                      <button class="secondary-button" type="button" :disabled="busy" @click="prepareAuthorization(task)">设为待执行</button>
-                    </template>
-                    <template v-else-if="task.status === 'AUTHORIZED' && !activeAuthorization(task.id)">
-                      <p><strong>尚无有效授权</strong><span>历史失败、撤销或退回不会自动生成新授权。</span></p>
-                      <button class="primary-button" type="button" :disabled="busy" @click="approveTask(task)">批准执行</button>
-                    </template>
-                    <template v-else-if="task.status === 'AUTHORIZED' && activeAuthorization(task.id)">
-                      <p><strong class="authorization-active">授权 ACTIVE</strong><span>{{ formatTime(activeAuthorization(task.id)!.authorizedAt) }}</span></p>
-                      <div class="inline-actions"><button class="secondary-button dev-action" type="button" :disabled="busy" @click="startManualRun(task, activeAuthorization(task.id)!)">开始模拟 Run（验证）</button><button class="danger-text" type="button" :disabled="busy" @click="revokeTaskAuthorization(task, activeAuthorization(task.id)!)">撤销授权</button></div>
-                    </template>
-                    <template v-else-if="task.status === 'RUNNING' && latestRun(task.id)">
-                      <p><strong>{{ runNumber(latestRun(task.id)!) }} · {{ runPhaseName(latestRun(task.id)!.phase) }}</strong><span>执行者 {{ latestRun(task.id)!.actorName }} · {{ latestRun(task.id)!.actorType }}</span></p>
-                      <div class="inline-actions"><button v-if="latestRun(task.id)!.phase !== 'SUBMITTING'" class="secondary-button" type="button" :disabled="busy" @click="advanceRun(latestRun(task.id)!)">推进阶段</button><button class="primary-button" type="button" :disabled="busy" @click="openRunSubmit(latestRun(task.id)!)">提交结果</button><button class="danger-text" type="button" :disabled="busy" @click="finishRun(latestRun(task.id)!, 'fail')">标记失败</button><button class="text-button" type="button" :disabled="busy" @click="finishRun(latestRun(task.id)!, 'abort')">中断</button></div>
-                    </template>
-                    <template v-else-if="task.status === 'SUBMITTED' && latestRun(task.id)">
-                      <p><strong>{{ runNumber(latestRun(task.id)!) }} 已提交</strong><span>{{ latestRun(task.id)!.summary }} · 修改文件 {{ latestRun(task.id)!.changedFiles.length }} · 验证 {{ latestRun(task.id)!.verificationSummary?.status ?? '未填写' }}</span></p>
-                      <div class="inline-actions"><button class="primary-button" type="button" :disabled="busy" @click="confirmTask(task)">确认完成</button><button class="secondary-button" type="button" :disabled="busy" @click="returnTask(task)">退回重新执行</button></div>
-                    </template>
-                    <template v-else><p><strong>已人工确认</strong><span>仅 CONFIRMED Task 计入开发进度；历史 Run {{ runsForTask(task.id).length }} 条。</span></p></template>
-                  </div>
-                </article>
-              </div>
-              <div v-else class="progress-empty"><strong>尚未拆分实施 Task</strong><p>按实际交付边界创建 Task，不会自动按技术分层拆分。</p><button class="primary-button" type="button" @click="editTask()">创建第一个 Task</button></div>
-            </section>
-            <section v-if="featureTab === 'history'" class="surface feature-history"><div class="surface-heading"><div><span class="section-index">REV</span><h2>版本历史</h2></div><span class="count-label">{{ revisions.length }}</span></div><div v-if="revisions.length" class="history-split"><div class="revision-list"><button v-for="revision in revisions" :key="revision.id" type="button" :class="{ active: selectedRevision?.id === revision.id }" @click="selectHistory(revision.id)"><span class="revision-number">R{{ revision.revisionNo }}</span><span><strong>{{ revision.changeSummary }}</strong><small>{{ formatTime(revision.createdAt) }}</small></span><b>{{ revision.id === currentRevision?.id ? '当前' : '→' }}</b></button></div><article class="history-preview"><div v-if="selectedRevision" class="markdown-body" v-html="renderMarkdown(selectedRevision.content)"></div></article></div><div v-else class="progress-empty"><strong>暂无设计版本</strong><p>功能设计创建后会在这里保留只读历史。</p></div></section>
+            <EngineeringWorkbench
+              :project="currentProject"
+              :feature="selectedFeature"
+              :module-name="selectedModule?.name ?? '未分组'"
+              :detail="projectDetail"
+              @changed="refreshCurrentProject"
+              @back="navigate('features')"
+            />
           </template>
 
-          <template v-if="workspacePage === 'development'"><div class="compact-page-heading"><div><p class="eyebrow">05 / DELIVERY</p><h1>开发进度</h1><p>按 Module → Feature → Task 查看真实研发清单；进度只来自 Task 状态。</p></div></div><section class="surface progress-list"><div class="development-head"><span>模块 / 功能</span><span>状态</span><span>设计</span><span>实施</span><span>验证</span></div><template v-if="projectDetail.features.length"><div v-for="module in projectDetail.modules" :key="module.id" class="development-module"><div class="development-module-name"><strong>{{ module.name }}</strong><code>{{ module.code }}</code></div><template v-for="feature in featuresForModule(module.id)" :key="feature.id"><button class="development-feature-row" type="button" @click="toggleProgressFeature(feature.id)"><span><b>{{ expandedProgressFeatures.has(feature.id) ? '▾' : '▸' }}</b><strong>{{ feature.name }}</strong><code>{{ feature.code }}</code></span><span class="feature-status" :data-status="feature.status">{{ statusName(feature.status) }}</span><span>{{ hasFeatureDesign(feature.id) ? '✓ 已有设计' : '未设计' }}</span><span>{{ implementationProgress(feature.id) }}</span><span>{{ verificationProgress(feature.id) }}</span></button><div v-if="expandedProgressFeatures.has(feature.id)" class="development-tasks"><button v-for="task in tasksForFeature(feature.id)" :key="task.id" type="button" @click="openFeature(feature); featureTab = 'plan'"><span><code>{{ task.code }}</code><strong>{{ task.name }}</strong></span><span>{{ taskTypeName(task.type) }}</span><span class="task-status" :data-status="task.status">{{ task.status }}</span><span>{{ task.objective || '—' }}</span></button><div v-if="!tasksForFeature(feature.id).length" class="development-no-tasks">未拆分 Task</div></div></template></div><div class="progress-note">实施列只统计 BACKEND / FRONTEND / INTEGRATION / OTHER；DESIGN 不计入实施，VERIFICATION 单独统计。Feature 状态仍由人工维护。</div></template><div v-else class="progress-empty"><strong>当前没有可展示的功能</strong><p>创建 Feature 后，这里会显示真实状态；不会计算虚假进度。</p></div></section></template>
-          <template v-if="workspacePage === 'testing'"><div class="compact-page-heading"><div><p class="eyebrow">06 / QUALITY</p><h1>测试与验收</h1><p>未来展示 Feature → Test → Acceptance。</p></div></div><section class="surface formal-empty single"><span class="empty-code">NOT AVAILABLE</span><h2>Test 与 Acceptance 模型尚未开放</h2><p>当前没有真实数据，因此不展示模拟结果、状态或数量。</p></section></template>
+           <template v-if="workspacePage === 'planning'"><div class="compact-page-heading"><div><h1>开发计划</h1></div></div><section class="surface plan-board"><div class="plan-board-head"><span>功能</span><span>当前设计</span><span>实施任务</span><span>状态</span></div><button v-for="feature in projectDetail.features" :key="feature.id" type="button" @click="openFeature(feature)"><span><strong>{{ feature.name }}</strong><small>{{ feature.code }}</small></span><span>{{ projectDetail.project.workflowMode === 'AUTO' ? (projectDetail.specifications.find(item => item.featureId === feature.id)?.latestRevisionNumber ? `REV ${projectDetail.specifications.find(item => item.featureId === feature.id)?.latestRevisionNumber}` : '待设计') : (projectDetail.specifications.find(item => item.featureId === feature.id)?.approvedRevisionNumber ? `REV ${projectDetail.specifications.find(item => item.featureId === feature.id)?.approvedRevisionNumber}` : '待批准') }}</span><span><i v-for="task in tasksForFeature(feature.id)" :key="task.id">{{ taskCategoryName(task.category) }}<b v-if="task.area"> / {{ task.area }}</b></i><em v-if="!tasksForFeature(feature.id).length">待规划</em></span><span>{{ tasksForFeature(feature.id).length }} 项 →</span></button><div v-if="!projectDetail.features.length" class="progress-empty"><strong>暂无功能</strong></div></section></template>
+
+          <CapabilityProgress v-if="workspacePage === 'development'" :detail="projectDetail" mode="development" @open-feature="openFeature" />
+          <CapabilityProgress v-if="workspacePage === 'testing'" :detail="projectDetail" mode="testing" @open-feature="openFeature" />
           <template v-if="workspacePage === 'ai'">
-            <div class="compact-page-heading"><div><p class="eyebrow">07 / AI RUNS</p><h1>AI 执行记录</h1><p>记录每次授权后的真实 Run 生命周期；本轮仅提供手工模拟入口，不连接 AI Runner。</p></div></div>
+            <div class="compact-page-heading"><div><h1>AI 执行记录</h1></div></div>
             <section v-if="sortedRuns.length" class="run-workbench">
-              <div class="surface run-ledger"><div class="run-ledger-head"><span>Run</span><span>功能 / Task</span><span>状态</span><span>执行者</span><span>开始时间</span></div><button v-for="run in sortedRuns" :key="run.id" type="button" :class="{ active: selectedRun?.id === run.id }" @click="selectedRun = run"><strong>{{ runNumber(run) }}</strong><span>{{ featureDisplayName(run.featureId) }}<small>{{ taskNameById(run.taskId) }}</small></span><span class="run-status" :data-status="run.status">{{ runStatusName(run.status) }}</span><span>{{ run.actorName }}<small>{{ run.actorType }}</small></span><time>{{ formatTime(run.startedAt) }}</time></button></div>
-              <aside v-if="selectedRun" class="surface run-detail"><div class="surface-heading"><div><span class="section-index">RUN</span><h2>{{ runNumber(selectedRun) }}</h2></div><span class="run-status" :data-status="selectedRun.status">{{ selectedRun.status }}</span></div><dl><div><dt>Task</dt><dd>{{ featureDisplayName(selectedRun.featureId) }} / {{ taskNameById(selectedRun.taskId) }}</dd></div><div><dt>Authorization</dt><dd><code>{{ selectedRun.authorizationId }}</code></dd></div><div><dt>Actor</dt><dd>{{ selectedRun.actorName }} · {{ selectedRun.actorType }}</dd></div><div><dt>Phase</dt><dd>{{ runPhaseName(selectedRun.phase) }}（{{ selectedRun.phase }}）</dd></div><div><dt>baseCommit</dt><dd><code>{{ selectedRun.baseCommit || '—' }}</code></dd></div><div><dt>resultCommit</dt><dd><code>{{ selectedRun.resultCommit || '—' }}</code></dd></div></dl><div class="run-result"><h3>结果摘要</h3><p>{{ selectedRun.summary || '尚未提交结果' }}</p><h3>修改文件</h3><ul v-if="selectedRun.changedFiles.length"><li v-for="file in selectedRun.changedFiles" :key="file"><code>{{ file }}</code></li></ul><p v-else>—</p><h3>验证</h3><p>{{ selectedRun.verificationSummary ? `${selectedRun.verificationSummary.status} · ${selectedRun.verificationSummary.summary}` : '—' }}</p><h3>问题</h3><ul v-if="selectedRun.issues.length"><li v-for="issue in selectedRun.issues" :key="issue">{{ issue }}</li></ul><p v-else>—</p></div><div class="run-timeline"><span>创建 {{ formatTime(selectedRun.createdAt) }}</span><span>开始 {{ formatTime(selectedRun.startedAt) }}</span><span v-if="selectedRun.submittedAt">提交 {{ formatTime(selectedRun.submittedAt) }}</span><span v-if="selectedRun.finishedAt">结束 {{ formatTime(selectedRun.finishedAt) }}</span></div></aside>
+              <div class="surface run-ledger"><div class="run-ledger-head"><span>时间</span><span>功能 / 实施任务</span><span>AI</span><span>状态</span><span>AI执行</span></div><button v-for="run in sortedRuns" :key="run.id" type="button" :class="{ active: selectedRun?.id === run.id }" @click="selectedRun = run"><time>{{ formatTime(run.startedAt) }}</time><span>{{ featureDisplayName(run.featureId) }}<small>{{ taskNameById(run.taskId) }}</small></span><span>{{ run.actorName }}<small>{{ run.actorType }}</small></span><span class="run-status" :data-status="run.status">{{ runStatusName(run.status) }}</span><strong>{{ runNumber(run) }}</strong></button></div>
+              <aside v-if="selectedRun" class="surface run-detail"><div class="surface-heading"><div><span class="section-index">AI执行</span><h2>{{ runNumber(selectedRun) }}</h2></div><span class="run-status" :data-status="selectedRun.status">{{ runStatusName(selectedRun.status) }}</span></div><dl><div><dt>实施任务</dt><dd>{{ featureDisplayName(selectedRun.featureId) }} / {{ taskNameById(selectedRun.taskId) }}</dd></div><div><dt>执行模式</dt><dd>{{ selectedRun.authorizationId ? '受控模式 · 已授权' : '自动模式' }}</dd></div><div><dt>执行者</dt><dd>{{ selectedRun.actorName }}</dd></div><div><dt>阶段</dt><dd>{{ runPhaseName(selectedRun.phase) }}</dd></div><div><dt>基线提交</dt><dd><code>{{ selectedRun.baseCommit || '—' }}</code></dd></div><div><dt>结果提交</dt><dd><code>{{ selectedRun.resultCommit || '—' }}</code></dd></div></dl><div class="run-result"><h3>结果摘要</h3><p>{{ selectedRun.summary || '尚未提交结果' }}</p><h3>修改文件</h3><ul v-if="selectedRun.changedFiles.length"><li v-for="file in selectedRun.changedFiles" :key="runFileLabel(file)"><code>{{ runFileLabel(file) }}</code></li></ul><p v-else>—</p><h3>验证</h3><p>{{ verificationLabel(selectedRun) }}{{ selectedRun.verificationSummary ? ` · ${selectedRun.verificationSummary.summary}` : '' }}</p><h3>问题</h3><ul v-if="selectedRun.issues.length"><li v-for="issue in selectedRun.issues" :key="issue">{{ issue }}</li></ul><p v-else>—</p></div><div class="run-timeline"><span>创建 {{ formatTime(selectedRun.createdAt) }}</span><span>开始 {{ formatTime(selectedRun.startedAt) }}</span><span v-if="selectedRun.submittedAt">提交 {{ formatTime(selectedRun.submittedAt) }}</span><span v-if="selectedRun.finishedAt">结束 {{ formatTime(selectedRun.finishedAt) }}</span></div></aside>
             </section>
-            <section v-else class="surface formal-empty single"><span class="empty-code">NO RUNS</span><h2>当前还没有执行记录</h2><p>在 Feature 实施计划中完成人工授权后，可使用开发验证入口启动首个 Run。</p></section>
+            <section v-else class="surface formal-empty single"><h2>暂无 AI 执行记录。</h2></section>
           </template>
-          <template v-if="workspacePage === 'history'"><div class="compact-page-heading"><div><p class="eyebrow">08 / HISTORY</p><h1>版本与历史</h1><p>项目现有设计资料的真实 Revision 记录。</p></div></div><section class="surface history-stream"><div class="history-stream-head"><span>版本</span><span>设计资料</span><span>变更摘要</span><span>来源</span><span>时间</span></div><button v-for="activity in projectActivity" :key="activity.id" type="button" @click="openOtherMaterial(activity.specification)"><span class="revision-number">R{{ activity.revisionNo }}</span><strong>{{ kindName(activity.specification.kind) }} · {{ activity.specification.title }}</strong><span>{{ activity.changeSummary }}</span><span>{{ sourceName(activity.source) }}</span><time>{{ formatTime(activity.createdAt) }}</time></button><div v-if="!projectActivity.length" class="progress-empty"><strong>暂无 Revision 历史</strong><p>创建项目级设计资料版本后会在这里显示。</p></div></section></template>
+          <template v-if="workspacePage === 'history'"><div class="compact-page-heading"><div><h1>版本与历史</h1></div></div><section class="surface history-stream"><div class="history-stream-head"><span>版本</span><span>设计资料</span><span>变更摘要</span><span>来源</span><span>时间</span></div><button v-for="activity in projectActivity" :key="activity.id" type="button" @click="openOtherMaterial(activity.specification)"><span class="revision-number">R{{ activity.revisionNo }}</span><strong>{{ kindName(activity.specification.kind) }} · {{ activity.specification.title }}</strong><span>{{ activity.changeSummary }}</span><span>{{ sourceName(activity.source) }}</span><time>{{ formatTime(activity.createdAt) }}</time></button><div v-if="!projectActivity.length" class="progress-empty"><strong>暂无版本历史</strong></div></section></template>
         </main>
       </div>
     </template>
 
-    <div v-if="showProjectDialog" class="dialog-backdrop" @click.self="showProjectDialog = false"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title"><div class="dialog-heading"><div><p class="eyebrow">NEW PROJECT</p><h2 id="project-dialog-title">新建项目</h2></div><button type="button" aria-label="关闭" @click="showProjectDialog = false">×</button></div><form class="form-stack" @submit.prevent="createProject"><label for="project-name">项目名称</label><input id="project-name" v-model="projectName" maxlength="120" required placeholder="例如 ForgeFlow" /><label for="project-key">项目标识</label><input id="project-key" v-model="projectKey" maxlength="32" required placeholder="例如 FORGEFLOW" /><p class="form-hint">2–32 个字母、数字、_ 或 -，必须以字母开头。</p><div class="dialog-actions"><button class="secondary-button" type="button" @click="showProjectDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">创建并进入 <span>→</span></button></div></form></section></div>
+    <div v-if="showProjectDialog" class="dialog-backdrop" @click.self="showProjectDialog = false">
+      <section class="dialog project-source-dialog" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title">
+        <div class="dialog-heading"><div><h2 id="project-dialog-title">新建项目</h2></div><button type="button" aria-label="关闭" @click="showProjectDialog = false">×</button></div>
+        <form class="form-stack" @submit.prevent="createProject">
+          <div class="project-form-grid">
+            <label for="project-name">项目名称<input id="project-name" v-model="projectName" maxlength="120" required placeholder="例如 视频智能分析平台" /></label>
+            <label for="project-key">项目标识<input id="project-key" v-model="projectKey" maxlength="32" required placeholder="例如 VIDEO_AI" /></label>
+          </div>
+          <p class="form-hint">项目标识使用 2–32 个字母、数字、_ 或 -，必须以字母开头。</p>
+          <label for="project-type">项目类型<input id="project-type" v-model="projectType" maxlength="80" required placeholder="video-pipeline + ai + web" /></label>
+          <p class="form-hint">自由描述真实技术形态；不是固定枚举。</p>
+          <label for="project-description">项目描述<textarea id="project-description" v-model="projectDescription" maxlength="1000" placeholder="说明项目目标与运行场景"></textarea></label>
+
+          <fieldset class="source-mode-fieldset">
+            <legend>源码接入方式</legend>
+            <label :class="{ active: projectSourceMode === 'existing' }"><input type="radio" name="source-mode" :checked="projectSourceMode === 'existing'" @change="chooseProjectSourceMode('existing')" /><span><strong>已有源码</strong><small>现在登记一个或多个实际位置</small></span></label>
+            <label :class="{ active: projectSourceMode === 'later' }"><input type="radio" name="source-mode" :checked="projectSourceMode === 'later'" @change="chooseProjectSourceMode('later')" /><span><strong>稍后绑定源码</strong><small>先规划项目，不虚构路径</small></span></label>
+          </fieldset>
+
+          <section v-if="projectSourceMode === 'existing'" class="project-source-builder">
+            <article v-for="(source, index) in projectSources" :key="source.clientId" class="project-source-row" :class="{ expanded: expandedProjectSourceId === source.clientId }">
+              <header><button class="source-accordion-toggle" type="button" @click="expandedProjectSourceId = expandedProjectSourceId === source.clientId ? null : source.clientId"><span>{{ String(index + 1).padStart(2, '0') }}</span><strong>源码 {{ String(index + 1).padStart(2, '0') }} · {{ source.alias || source.displayName || '未命名' }}</strong><small>{{ source.localRoot || '尚未填写本地目录' }}</small><b>{{ expandedProjectSourceId === source.clientId ? '▾' : '›' }}</b></button><button v-if="projectSources.length > 1" class="remove-source" type="button" @click="removeProjectSource(source.clientId)">删除</button></header>
+              <div v-if="expandedProjectSourceId === source.clientId" class="project-source-fields">
+                <div class="project-form-grid"><label>源码别名<input v-model="source.alias" maxlength="40" required placeholder="backend" /></label><label>显示名称<input v-model="source.displayName" maxlength="120" required placeholder="业务后端" /></label></div>
+                <label>用途<input v-model="source.purpose" maxlength="500" placeholder="业务 API 与数据处理" /></label>
+                <div class="project-form-grid"><label>类型<select v-model="source.sourceKind"><option value="GIT">Git 仓库</option><option value="DIRECTORY">普通目录</option></select></label><label>当前环境<input v-model="source.environmentKey" maxlength="80" required placeholder="flycode-pc" /></label></div>
+                <label>本地源码目录<input v-model="source.localRoot" maxlength="1024" required placeholder="D:\Projects\video-api" /></label>
+                <div class="project-form-grid"><label>Git Remote（可选）<input v-model="source.remoteUrl" maxlength="2048" /></label><label>仓库子目录（可选）<input v-model="source.repoSubdir" maxlength="500" placeholder="apps/backend" /></label></div>
+              </div>
+            </article>
+            <button class="add-source-row" type="button" @click="addProjectSource">＋ 添加源码位置</button>
+          </section>
+
+          <div class="dialog-actions"><button class="secondary-button" type="button" @click="showProjectDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">创建并进入 <span>→</span></button></div>
+        </form>
+      </section>
+    </div>
     <div v-if="showSpecDialog" class="dialog-backdrop" @click.self="showSpecDialog = false"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="spec-dialog-title"><div class="dialog-heading"><div><p class="eyebrow">PROJECT DOCUMENT</p><h2 id="spec-dialog-title">创建{{ activeDocumentConfig.title }}</h2></div><button type="button" aria-label="关闭" @click="showSpecDialog = false">×</button></div><form class="form-stack" @submit.prevent="createSpecification"><label for="spec-title">资料名称</label><input id="spec-title" v-model="specTitle" maxlength="120" required /><p class="form-hint">正文将在下一步以 Markdown 创建首个 Revision。</p><div class="dialog-actions"><button class="secondary-button" type="button" @click="showSpecDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">创建并编辑 <span>→</span></button></div></form></section></div>
     <div v-if="showModuleDialog" class="dialog-backdrop" @click.self="showModuleDialog = false"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="module-dialog-title"><div class="dialog-heading"><div><p class="eyebrow">MODULE</p><h2 id="module-dialog-title">{{ editingModuleId ? '编辑模块' : '新建模块' }}</h2></div><button type="button" aria-label="关闭" @click="showModuleDialog = false">×</button></div><form class="form-stack" @submit.prevent="saveModule"><label for="module-name">模块名称</label><input id="module-name" v-model="moduleName" maxlength="120" required /><label for="module-code">模块编号</label><input id="module-code" v-model="moduleCode" maxlength="40" required placeholder="例如 IAM" /><label for="module-description">说明</label><textarea id="module-description" v-model="moduleDescription" maxlength="500"></textarea><label for="module-sort">排序值</label><input id="module-sort" v-model.number="moduleSortOrder" type="number" min="0" step="1" required /><div class="dialog-actions"><button class="secondary-button" type="button" @click="showModuleDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">{{ editingModuleId ? '保存修改' : '创建模块' }} →</button></div></form></section></div>
-    <div v-if="showFeatureDialog" class="dialog-backdrop" @click.self="showFeatureDialog = false"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="feature-dialog-title"><div class="dialog-heading"><div><p class="eyebrow">FEATURE</p><h2 id="feature-dialog-title">{{ editingFeatureId ? '编辑功能' : '新建功能' }}</h2></div><button type="button" aria-label="关闭" @click="showFeatureDialog = false">×</button></div><form class="form-stack" @submit.prevent="saveFeature"><label for="feature-module">所属模块</label><select id="feature-module" v-model="featureModuleId" required><option v-for="module in projectDetail?.modules ?? []" :key="module.id" :value="module.id">{{ module.name }}</option></select><label for="feature-name">功能名称</label><input id="feature-name" v-model="featureName" maxlength="120" required /><label for="feature-code">功能编号</label><input id="feature-code" v-model="featureCode" maxlength="40" required placeholder="例如 P2-W03" /><label for="feature-summary">摘要</label><textarea id="feature-summary" v-model="featureSummary" maxlength="1000"></textarea><div class="dialog-grid"><label>状态<select v-model="featureStatus"><option v-for="status in featureStatuses" :key="status.value" :value="status.value">{{ status.label }}（{{ status.value }}）</option></select></label><label>排序值<input v-model.number="featureSortOrder" type="number" min="0" step="1" required /></label></div><div class="dialog-actions"><button class="secondary-button" type="button" @click="showFeatureDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">{{ editingFeatureId ? '保存修改' : '创建功能' }} →</button></div></form></section></div>
-    <div v-if="showTaskDialog" class="dialog-backdrop" @click.self="showTaskDialog = false"><section class="dialog task-dialog" role="dialog" aria-modal="true" aria-labelledby="task-dialog-title"><div class="dialog-heading"><div><p class="eyebrow">TASK</p><h2 id="task-dialog-title">{{ editingTaskId ? '编辑 Task' : '新建 Task' }}</h2></div><button type="button" aria-label="关闭" @click="showTaskDialog = false">×</button></div><form class="form-stack" @submit.prevent="saveTask"><div class="dialog-grid"><label>任务名称<input v-model="taskName" maxlength="120" required /></label><label>任务编号<input v-model="taskCode" maxlength="40" required placeholder="例如 T01" /></label></div><label for="task-objective">任务目标</label><textarea id="task-objective" v-model="taskObjective" maxlength="2000" placeholder="说明完成此 Task 应达到的具体结果"></textarea><div class="dialog-grid"><label>类型<select v-model="taskType"><option v-for="type in taskTypes" :key="type.value" :value="type.value">{{ type.label }}（{{ type.value }}）</option></select></label><label>状态<select v-model="taskStatus" :disabled="!editingTaskId || !['PLANNED', 'AUTHORIZED'].includes(taskStatus)"><option value="PLANNED">待授权（PLANNED）</option><option value="AUTHORIZED">已授权（AUTHORIZED）</option><option v-if="!['PLANNED', 'AUTHORIZED'].includes(taskStatus)" :value="taskStatus">{{ taskStatusName(taskStatus) }}（{{ taskStatus }}）</option></select></label></div><label>排序值<input v-model.number="taskSortOrder" type="number" min="0" step="1" required /></label><p class="form-hint">RUNNING / SUBMITTED / CONFIRMED 只允许通过授权、Run 与人工确认操作产生，不能在表单中伪造。</p><div class="dialog-actions"><button class="secondary-button" type="button" @click="showTaskDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">{{ editingTaskId ? '保存修改' : '创建 Task' }} →</button></div></form></section></div>
-    <div v-if="showRunSubmitDialog" class="dialog-backdrop" @click.self="showRunSubmitDialog = false"><section class="dialog run-submit-dialog" role="dialog" aria-modal="true" aria-labelledby="run-submit-title"><div class="dialog-heading"><div><p class="eyebrow">RUN RESULT</p><h2 id="run-submit-title">提交 Run 结果</h2></div><button type="button" aria-label="关闭" @click="showRunSubmitDialog = false">×</button></div><form class="form-stack" @submit.prevent="submitRun"><label>结果摘要<textarea v-model="runSummary" maxlength="4000" required placeholder="说明本次 Run 完成了什么"></textarea></label><label>resultCommit（可空）<input v-model="runResultCommit" maxlength="120" placeholder="例如 abc123" /></label><label>修改文件（每行一个）<textarea v-model="runChangedFiles" maxlength="20000" spellcheck="false" placeholder="apps/server/src/...&#10;apps/web/src/..."></textarea></label><div class="dialog-grid"><label>验证状态<input v-model="runVerificationStatus" maxlength="40" required placeholder="PASS / FAIL / NOT_RUN" /></label><label>验证摘要<input v-model="runVerificationSummary" maxlength="2000" required placeholder="例如 typecheck、build、test 通过" /></label></div><label>问题（每行一个，可空）<textarea v-model="runIssues" maxlength="20000"></textarea></label><p class="form-hint">提交后 Run 与历史结果不可覆盖；Task 进入 SUBMITTED，仍需人工确认。</p><div class="dialog-actions"><button class="secondary-button" type="button" @click="showRunSubmitDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">提交结果 →</button></div></form></section></div>
+    <div v-if="showFeatureDialog" class="dialog-backdrop" @click.self="showFeatureDialog = false"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="feature-dialog-title"><div class="dialog-heading"><div><h2 id="feature-dialog-title">{{ editingFeatureId ? '编辑功能' : '新建功能' }}</h2></div><button type="button" aria-label="关闭" @click="showFeatureDialog = false">×</button></div><form class="form-stack" @submit.prevent="saveFeature"><label for="feature-module">所属模块</label><select id="feature-module" v-model="featureModuleId" required><option v-for="module in projectDetail?.modules ?? []" :key="module.id" :value="module.id">{{ module.name }}</option></select><label for="feature-name">功能名称</label><input id="feature-name" v-model="featureName" maxlength="120" required /><label for="feature-code">功能编号</label><input id="feature-code" v-model="featureCode" maxlength="40" required placeholder="例如 P2-W03" /><label for="feature-summary">摘要</label><textarea id="feature-summary" v-model="featureSummary" maxlength="1000"></textarea><div class="dialog-grid"><label>状态<select v-model="featureStatus"><option v-for="status in featureStatuses" :key="status.value" :value="status.value">{{ status.label }}</option></select></label><label>排序值<input v-model.number="featureSortOrder" type="number" min="0" step="1" required /></label></div><div class="dialog-actions"><button class="secondary-button" type="button" @click="showFeatureDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">{{ editingFeatureId ? '保存修改' : '创建功能' }} →</button></div></form></section></div>
+    <div v-if="showReviewDecisionDialog" class="dialog-backdrop" @click.self="showReviewDecisionDialog = false"><section class="dialog review-dialog" role="dialog" aria-modal="true" aria-labelledby="review-decision-title"><div class="dialog-heading"><div><p class="eyebrow">DESIGN REVIEW</p><h2 id="review-decision-title">要求修改 REV {{ currentRevision?.revisionNo }}</h2></div><button type="button" aria-label="关闭" @click="showReviewDecisionDialog = false">×</button></div><form class="form-stack" @submit.prevent="submitChangeRequest"><label for="review-comment">修改原因</label><textarea id="review-comment" v-model="reviewDecisionComment" maxlength="1000" required placeholder="说明必须调整的设计边界或问题"></textarea><p class="form-hint">当前 Revision 保持不可变。AI 或用户需要创建新的 Revision 后重新提交评审。</p><div class="dialog-actions"><button class="secondary-button" type="button" @click="showReviewDecisionDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy">提交修改要求</button></div></form></section></div>
   </div>
 </template>

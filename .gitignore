@@ -8,6 +8,9 @@ data/
 coverage/
 *.tsbuildinfo
 .tmp/
+.artifacts/
+artifacts/
+docs/
 
 # Editor and IDE files
 .idea/

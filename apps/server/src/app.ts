@@ -9,6 +9,7 @@ import { AuthService } from './modules/security/auth.service.js';
 import { WorkspaceRepository } from './modules/workspace/workspace.repository.js';
 import { registerWorkspaceRoutes } from './modules/workspace/workspace.routes.js';
 import { WorkspaceService } from './modules/workspace/workspace.service.js';
+import { registerMcpRoutes } from './modules/mcp/mcp.routes.js';
 
 export function createApp(databasePath?: string) {
   const connection = openDatabase(databasePath);
@@ -30,8 +31,10 @@ export function createApp(databasePath?: string) {
     } });
   });
   const auth = new AuthService(new AuthRepository(connection));
+  const workspace = new WorkspaceService(new WorkspaceRepository(connection));
   registerAuthRoutes(app, auth);
-  registerWorkspaceRoutes(app, new WorkspaceService(new WorkspaceRepository(connection)), auth);
+  registerWorkspaceRoutes(app, workspace, auth);
+  registerMcpRoutes(app, workspace, auth);
 
   app.addHook('onClose', async () => {
     sqlite.close();

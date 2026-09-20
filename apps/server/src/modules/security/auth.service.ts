@@ -6,10 +6,13 @@ import { AuthRepository } from './auth.repository.js';
 
 export const SESSION_COOKIE = 'forgeflow_session';
 export const SESSION_MAX_AGE = 12 * 60 * 60;
-const SCOPES: AiScope[] = ['project:read', 'spec:read', 'spec:write'];
+const SCOPES: AiScope[] = [
+  'project:read', 'project:write', 'spec:read', 'spec:write', 'planning:write', 'task:read', 'run:write',
+];
+export type AiTokenPrincipal = { kind: 'ai_token'; id: string; name: string; scopes: AiScope[] };
 type Principal = OwnerIdentity
   | { kind: 'local_web'; id: 'local'; name: 'ForgeFlow Local' }
-  | { kind: 'ai_token'; id: string; name: string; scopes: AiScope[] };
+  | AiTokenPrincipal;
 
 function isLoopback(address: string) {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -98,6 +101,20 @@ export class AuthService {
     }
     if (secret) throw new ApiError(401, 'UNAUTHENTICATED', 'Session 已失效，请重新登录');
     throw new ApiError(401, 'UNAUTHENTICATED', '请先登录');
+  }
+
+  requireAiToken(request: FastifyRequest, permissions: AiScope[] = []): AiTokenPrincipal {
+    const authorization = request.headers.authorization;
+    const match = authorization && /^Bearer (ffai_[A-Za-z0-9_-]+)$/.exec(authorization);
+    if (!match) throw new ApiError(401, 'UNAUTHENTICATED', 'MCP 需要有效的 AI Bearer Token');
+    const token = this.repository.findTokenByHash(hash(match[1]!));
+    if (!token || token.revokedAt) throw new ApiError(401, 'UNAUTHENTICATED', 'Bearer Token 无效或已撤销');
+    const scopes = JSON.parse(token.scopes) as AiScope[];
+    if (permissions.some((permission) => !scopes.includes(permission))) {
+      throw new ApiError(403, 'FORBIDDEN', 'AI Token 缺少 MCP Tool 所需 Scope');
+    }
+    this.repository.touchToken(token.id, new Date());
+    return { kind: 'ai_token', id: token.id, name: token.name, scopes };
   }
 
   listTokens() { return this.repository.listTokens().map(tokenView); }
