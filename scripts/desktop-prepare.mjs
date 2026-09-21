@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cp, copyFile, mkdir, access, readFile, realpath } from 'node:fs/promises';
+import { cp, copyFile, mkdir, access, readFile, realpath, rm } from 'node:fs/promises';
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,8 +9,7 @@ if (process.platform !== 'win32') throw new Error('This packaging entry currentl
 if (Number(process.versions.node.split('.')[0]) !== 24) throw new Error('Build with Node 24 to match better-sqlite3 ABI.');
 await access(join(root, 'apps/web/dist/index.html'));
 await access(join(root, 'apps/server/dist/server.js'));
-try { await access(runtime); throw new Error('Runtime staging already exists. Move it aside before preparing a new version.'); }
-catch (error) { if (error.code !== 'ENOENT') throw error; }
+await rm(runtime, { recursive: true, force: true });
 await mkdir(join(runtime, 'apps'), { recursive: true });
 // Copy the installed production dependency closure without fetching new versions.
 // Conflicting transitive versions remain nested, matching Node resolution.

@@ -4,7 +4,7 @@
 
 ## 安装和数据位置
 
-运行 `ForgeFlow-Setup-0.1.0.exe`，安装向导支持选择程序目录。目标必须是空的本地文件夹，不需要管理员权限。当前没有原位覆盖升级：先从托盘退出、卸载旧版，再安装新版。卸载仅处理安装清单内未修改的程序文件，不删除项目数据或存储配置。
+运行 `ForgeFlow-Setup-0.1.0.exe`，安装向导支持选择程序目录。安装程序支持常规就地无缝升级（In-place Upgrade）：自动从注册表读取历史安装位置并就地覆盖更新程序文件，自动平滑停止旧后台进程，卸载或覆盖均不影响任何项目数据与存储配置。
 
 首次启动会询问数据位置。请选择专用目录；建议位置为 `%LOCALAPPDATA%\ForgeFlow\data`，也可以选择其他本机磁盘。已有旧版默认目录数据会提供沿用选项，不会自动覆盖。
 
@@ -16,17 +16,17 @@
 
 ## 构建
 
+全局统一采用单个命令执行桌面端完整打包流水线（自动编译 Web/Server、装配运行时环境、编译 Tauri 桌面程序、生成便携包并编译 Windows 安装程序）：
+
 ```powershell
-pnpm build
-node scripts/desktop-prepare.mjs
-cargo build --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
-node scripts/desktop-package.mjs
-node scripts/installer-build.mjs
+# 官方正式版全流程统一打包（自动生成 ForgeFlow-Setup-0.1.0.exe）
+pnpm desktop:build
+
+# 快速调试版打包
+pnpm desktop:build --debug
 ```
 
-构建产物位于 `apps/desktop/dist`。首次编译需要 Rust、MSVC、Cargo 依赖及 Node 24。安装包编译还需要 NSIS 便携工具，详见仓库中的 `apps/desktop/installer/README.md`。当前包未签名，也没有自动更新、开机启动功能；运行机器需安装 Microsoft Edge WebView2 Runtime。
-
-生成优化版本时，Cargo 命令增加 `--release`，然后运行 `node scripts/desktop-package.mjs --release`。运行资源准备只复制已安装的生产依赖，执行 SQLite 原生模块检查。准备/便携打包拒绝覆盖已有目录，请先改名保留旧产物。不要把用户数据放入构建资源目录。
+构建产物位于 `apps/desktop/dist`。首次编译需要 Rust、MSVC、Cargo 依赖及 Node 24。安装包编译工具使用 NSIS 便携工具（自动位于 `.artifacts/installer-tools/nsis-3.11/makensis.exe`）。运行机器需安装 Microsoft Edge WebView2 Runtime。
 
 ## 后台与验证边界
 
