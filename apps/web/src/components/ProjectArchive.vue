@@ -423,24 +423,24 @@ onBeforeUnmount(() => { projectEpoch += 1; detailRequest += 1; listRequest += 1;
 <style scoped>
 .project-archive { min-width: 0; color: var(--ink); container-type: inline-size; }
 .project-archive button, .project-archive input, .project-archive select, .project-archive textarea { font: inherit; }
-.project-archive button { border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink-secondary); padding: 6px 10px; cursor: pointer; font-size: 13px; white-space: nowrap; }
-.project-archive button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+.project-archive button { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink-secondary); padding: 6px 12px; cursor: pointer; font-size: 13px; white-space: nowrap; transition: all 0.12s ease; }
+.project-archive button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); border-color: var(--line-strong); }
 .project-archive button:focus-visible, .project-archive input:focus-visible, .project-archive textarea:focus-visible, .project-archive select:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .project-archive button:disabled { opacity: .5; cursor: default; }
 .project-archive button.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
 .project-archive button.primary:hover:not(:disabled) { background: var(--primary-hover); }
 .archive-heading, .archive-heading > div, .reader-heading, .reader-heading > div, .import-heading, .import-footer, .records-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .archive-heading { margin-bottom: 18px; }
-.archive-heading h1 { font-size: 25px; margin: 0; letter-spacing: -.5px; }
+.archive-heading h1 { font-size: 24px; font-weight: 700; margin: 0; letter-spacing: -.01em; color: var(--ink); }
 .archive-count, .reader-meta, .records-toolbar > span { color: var(--muted); font-size: 12px; }
 .archive-tabs { display: flex; border-bottom: 1px solid var(--line); gap: 20px; margin-bottom: 16px; }
 .archive-tabs > button { border: 0; background: none; padding: 8px 2px 12px; border-radius: 0; }
 .archive-tabs > button.active { color: var(--primary); border-bottom: 2px solid var(--primary); font-weight: 600; }
 .archive-tabs > button.refresh { margin-left: auto; color: var(--muted); }
-.archive-message { padding: 10px 12px; margin: 12px 0; color: var(--primary); background: var(--primary-subtle); border-radius: 5px; font-size: 13px; overflow-wrap: anywhere; }
-.archive-message.error { color: var(--danger-ink); background: var(--danger-bg); }
-.archive-layout { display: grid; grid-template-columns: minmax(170px, 230px) minmax(0, 1fr); border: 1px solid var(--line); border-radius: 7px; background: var(--surface); min-height: 440px; }
-.archive-directory { border-right: 1px solid var(--line); min-width: 0; background: var(--surface-subtle); border-radius: 7px 0 0 7px; padding: 10px; }
+.archive-message { padding: 10px 12px; margin: 12px 0; color: var(--primary-dark); background: var(--primary-subtle); border: 1px solid rgba(15, 118, 110, 0.2); border-radius: var(--radius-sm); font-size: 13px; overflow-wrap: anywhere; }
+.archive-message.error { color: var(--danger-ink); background: var(--danger-bg); border-color: rgba(225, 29, 72, 0.2); }
+.archive-layout { display: grid; grid-template-columns: minmax(170px, 230px) minmax(0, 1fr); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); min-height: 440px; box-shadow: var(--shadow-sm); }
+.archive-directory { border-right: 1px solid var(--line); min-width: 0; background: var(--surface-subtle); border-radius: var(--radius-lg) 0 0 var(--radius-lg); padding: 12px; }
 .directory-toolbar > div { display: flex; gap: 6px; margin: 8px 0 12px; }
 .project-archive input, .project-archive textarea, .project-archive select { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 4px; padding: 8px; font-size: 13px; }
 .archive-directory nav { display: flex; flex-direction: column; gap: 2px; }

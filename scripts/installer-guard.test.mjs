@@ -43,3 +43,15 @@ test('uninstall validates manifest and location before removal; modified and ext
   assert.equal(await readFile(join(base, 'changed.txt'), 'utf8'), 'user edit');
   assert.equal(await readFile(join(base, 'user.db'), 'utf8'), 'user data');
 });
+
+test('installer accepts existing valid ForgeFlow directory for in-place upgrade', { skip: process.platform !== 'win32' }, async () => {
+  const base = await mkdtemp(join(tmpdir(), 'forgeflow-installer-upgrade-'));
+  await writeFile(join(base, 'ForgeFlow.exe'), 'binary');
+  await writeFile(join(base, 'Uninstall.exe'), 'uninstaller');
+  await writeFile(join(base, 'forgeflow-install-manifest.json'), '{}');
+  await writeFile(join(base, 'user-data.db'), 'user database');
+
+  assert.equal(run('Install', base).status, 0);
+  assert.equal(await readFile(join(base, 'user-data.db'), 'utf8'), 'user database');
+});
+

@@ -20,7 +20,7 @@ BrandingText "ForgeFlow"
 !define MUI_UNICON "${APP_ICON}"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "安装 ForgeFlow"
-!define MUI_WELCOMEPAGE_TEXT "选择程序安装目录。项目数据的位置将在首次启动时设置。$\r$\n$\r$\n升级前请先退出并卸载旧版，卸载不会删除项目数据。"
+!define MUI_WELCOMEPAGE_TEXT "选择程序安装目录。项目数据的位置将在首次启动时设置。$\r$\n$\r$\n若检测到旧版，将自动读取历史安装位置进行无缝更新，并完整保留所有项目数据与配置。"
 !insertmacro MUI_PAGE_WELCOME
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE CheckDirectory
 !insertmacro MUI_PAGE_DIRECTORY
@@ -37,9 +37,7 @@ Function .onInit
   ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPKEY}" "InstallLocation"
   ${If} $0 != ""
   ${AndIf} ${FileExists} "$0\Uninstall.exe"
-    MessageBox MB_ICONSTOP "当前用户已安装 ForgeFlow。请先退出并卸载旧版，再安装到新目录。项目数据不会被卸载程序删除。" /SD IDOK
-    SetErrorLevel 2
-    Quit
+    StrCpy $INSTDIR $0
   ${EndIf}
   ${IfNot} ${RunningX64}
     MessageBox MB_ICONSTOP "ForgeFlow 需要 64 位 Windows。" /SD IDOK
@@ -56,7 +54,7 @@ Function CheckDirectory
   Pop $0
   Pop $1
   ${If} $0 != 0
-    MessageBox MB_ICONSTOP "无法安装到此位置。请选择空的本地文件夹；旧版需先退出并卸载。$\r$\n$1" /SD IDOK
+    MessageBox MB_ICONSTOP "无法安装到此位置。请选择空的本地文件夹或已有 ForgeFlow 安装目录。$\r$\n$1" /SD IDOK
     SetErrorLevel 2
     Abort
   ${EndIf}
@@ -64,7 +62,7 @@ FunctionEnd
 
 Section "ForgeFlow"
   Call CheckDirectory
-  SetOverwrite off
+  SetOverwrite on
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   File /oname=forgeflow-install-manifest.json "${MANIFEST}"

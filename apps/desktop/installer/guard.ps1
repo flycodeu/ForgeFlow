@@ -23,7 +23,26 @@ try {
   }
   if ($Mode -eq 'Install') {
     if ((Test-Path -LiteralPath $targetPath) -and @(Get-ChildItem -LiteralPath $targetPath -Force).Count -gt 0) {
-      throw 'The destination must be empty. Uninstall the old version first; project data is retained.'
+      $isExistingForgeFlow = (Test-Path -LiteralPath (Join-Path $targetPath 'forgeflow-install-manifest.json')) -or `
+                             ((Test-Path -LiteralPath (Join-Path $targetPath 'ForgeFlow.exe')) -and (Test-Path -LiteralPath (Join-Path $targetPath 'Uninstall.exe')))
+      if (-not $isExistingForgeFlow) {
+        throw 'The destination must be empty or an existing ForgeFlow installation directory. Project data is retained.'
+      }
+      $active = @(Get-CimInstance Win32_Process | Where-Object {
+        $_.ExecutablePath -and $_.ExecutablePath -ne (Join-Path $targetPath 'Uninstall.exe') -and $_.ExecutablePath.StartsWith($targetPath + '\', [StringComparison]::OrdinalIgnoreCase)
+      })
+      if ($active.Count -gt 0) {
+        foreach ($proc in $active) {
+          Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Milliseconds 500
+        $stillActive = @(Get-CimInstance Win32_Process | Where-Object {
+          $_.ExecutablePath -and $_.ExecutablePath -ne (Join-Path $targetPath 'Uninstall.exe') -and $_.ExecutablePath.StartsWith($targetPath + '\', [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($stillActive.Count -gt 0) {
+          throw 'The application or its background service is running. Exit from the tray before upgrading.'
+        }
+      }
     }
     exit 0
   }

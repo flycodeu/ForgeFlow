@@ -115,7 +115,9 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
   grid-template-columns: 240px minmax(0, 1fr);
   min-height: 360px;
   overflow: hidden;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
 }
 .research-layout aside {
   border-right: 1px solid var(--line);
@@ -156,7 +158,7 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
   width: 100%;
   padding: 12px 18px;
   border: 0;
-  border-bottom: 1px solid var(--surface-subtle);
+  border-bottom: 1px solid var(--line-subtle);
   background: transparent;
   color: var(--ink-secondary);
   text-align: left;
@@ -188,16 +190,18 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
 }
 .status-badge {
   padding: 2px 7px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--surface-subtle);
   color: var(--muted);
+  border: 1px solid var(--line);
   font-size: 11px;
   font-weight: 600;
   font-style: normal;
 }
 .status-badge.active {
-  background: #ecfdf5;
-  color: #059669;
+  background: var(--primary-subtle);
+  color: var(--primary-dark);
+  border-color: rgba(15, 118, 110, 0.25);
 }
 article {
   padding: 28px 32px;
