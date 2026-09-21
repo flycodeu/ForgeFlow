@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import type { SpecificationRevision, SpecificationSummary } from '@forgeflow/contracts';
+import ArchiveMarkdown from './ArchiveMarkdown.vue';
 
 const props = defineProps<{ specification: SpecificationSummary | null; revision: SpecificationRevision | null }>();
 const emit = defineEmits<{ create: [] }>();
@@ -15,17 +16,18 @@ const items = computed<ResearchItem[]>(() => {
     const heading = /^##\s+(.+)$/.exec(line.trim());
     if (heading && !/对当前项目的影响|调研目标|调研对象/.test(heading[1] ?? '')) {
       if (current) result.push(current);
-      current = { name: heading[1]!.trim(), body: [], source: '公开资料', url: '', status: '已分析' };
+      current = { name: heading[1]!.trim(), body: [], source: '未记录', url: '', status: '未记录' };
       continue;
     }
-    if (!current || !line.trim() || /^\|\s*[-:]+/.test(line)) continue;
-    if (line.includes('|')) {
+    if (!current || /^\|\s*[-:]+/.test(line.trim())) continue;
+    if (/^\s*\|/.test(line)) {
       const cells = line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
       const key = cells[0] ?? ''; const value = cells[1] ?? '';
-      if (/来源/.test(key)) current.source = value;
-      else if (/URL/.test(key)) current.url = value;
-      else if (/状态/.test(key)) current.status = value;
-    } else if (!/^###?\s+/.test(line)) current.body.push(line.replace(/^[-*]\s+/, '').trim());
+      if (key === '来源') { current.source = value || '未记录'; continue; }
+      if (key === 'URL') { current.url = value; continue; }
+      if (key === '状态') { current.status = value || '未记录'; continue; }
+    }
+    current.body.push(line);
   }
   if (current) result.push(current);
   return result;
@@ -70,7 +72,7 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
           <div>
             <h2>{{ selected.name }}</h2>
           </div>
-          <span class="status-badge active">{{ selected.status }}</span>
+          <span class="status-badge" :class="{ active: selected.status !== '未记录' }">{{ selected.status }}</span>
         </header>
         <dl class="research-meta">
           <div>
@@ -91,12 +93,15 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
         </dl>
         <section class="research-findings">
           <h3>观察与结论</h3>
-          <div class="finding-lines">
-            <p v-for="(line, idx) in selected.body" :key="idx">{{ line }}</p>
-            <p v-if="!selected.body.length" class="text-muted">暂无观察记录</p>
-          </div>
+          <ArchiveMarkdown v-if="selected.body.some((line) => line.trim())" :content="selected.body.join('\n')" />
+          <p v-else class="text-muted">暂无观察记录</p>
         </section>
+        <details class="research-original"><summary>查看完整原文</summary><pre>{{ revision?.content }}</pre></details>
       </article>
+    </div>
+    <div v-else-if="revision?.content" class="surface research-raw">
+      <h2>调研原文</h2>
+      <ArchiveMarkdown :content="revision.content" />
     </div>
     <div v-else class="surface empty-state">
       <h3>尚无调研对象</h3>
@@ -253,15 +258,14 @@ article h2 {
   color: var(--ink);
   margin: 24px 0 12px;
 }
-.finding-lines p {
-  color: var(--ink-secondary);
-  font-size: 14px;
-  line-height: 1.7;
-  margin: 0 0 10px;
-}
 .text-muted {
   color: var(--muted-light);
 }
+.research-original { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 14px; }
+.research-original summary { cursor: pointer; color: var(--ink-secondary); font-size: 13px; }
+.research-original pre, .research-raw pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--mono); }
+.research-raw { padding: 24px; }
+.research-raw h2 { margin: 0 0 16px; font-size: 18px; }
 @container research (max-width: 720px) {
   .research-layout { grid-template-columns: 1fr; }
   .research-layout aside { border-right: 0; border-bottom: 1px solid var(--line); }

@@ -284,3 +284,27 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   assert.equal((await send({ method: 'GET', url: `${projectPath}/runs/${submittedRun.id}` })).json<AiRun>().summary, '完成 Backend 实现');
   assert.equal((await send({ method: 'GET', url: `${returnTaskPath}/authorizations` })).json<TaskAuthorization[]>()[0]?.status, 'REVOKED');
 });
+
+test('project creation defaults to AUTO without changing explicit CONTROLLED mode', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'forgeflow-project-mode-'));
+  const app = createApp(join(directory, 'forgeflow.db'));
+  t.after(async () => {
+    await app.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const initialized = await app.inject({ method: 'POST', url: '/api/auth/initialize', payload: {
+    username: 'owner', password: 'test-only-password-123',
+  } });
+  const cookie = initialized.headers['set-cookie']?.toString().split(';')[0];
+  assert.ok(cookie);
+  const created = await app.inject({ method: 'POST', url: '/api/projects', headers: { cookie }, payload: {
+    projectKey: 'AUTO_DEFAULT', name: '自由记录项目',
+  } });
+  assert.equal(created.statusCode, 201);
+  assert.equal(created.json<Project>().workflowMode, 'AUTO');
+  const controlled = await app.inject({ method: 'POST', url: '/api/projects', headers: { cookie }, payload: {
+    projectKey: 'CONTROLLED_MODE', name: '审查授权项目', workflowMode: 'CONTROLLED',
+  } });
+  assert.equal(controlled.statusCode, 201);
+  assert.equal(controlled.json<Project>().workflowMode, 'CONTROLLED');
+});

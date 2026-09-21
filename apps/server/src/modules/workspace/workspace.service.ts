@@ -392,7 +392,7 @@ export class WorkspaceService {
   createProject(input: { projectKey: string; name: string; description?: string; projectType?: string; workflowMode?: WorkflowMode; designProfile?: string }): Project {
     const project = { id: randomUUID(), projectKey: input.projectKey, name: input.name,
       description: input.description ?? '', projectType: input.projectType?.trim() || 'GENERAL',
-      workflowMode: input.workflowMode ?? 'CONTROLLED', designProfile: input.designProfile?.trim().toLowerCase() || 'generic', createdAt: new Date() };
+      workflowMode: input.workflowMode ?? 'AUTO', designProfile: input.designProfile?.trim().toLowerCase() || 'generic', createdAt: new Date() };
     try {
       this.repository.insertProject(project);
     } catch (error) {

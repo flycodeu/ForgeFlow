@@ -1462,8 +1462,9 @@ code, pre { font-family: var(--mono); }
   border-radius: var(--radius-md);
 }
 .source-mode-fieldset legend { padding: 0 8px; font-weight: 600; color: var(--ink-secondary); font-size: 12px; }
-.source-mode-fieldset label {
+.form-stack .source-mode-fieldset label {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
@@ -1480,6 +1481,9 @@ code, pre { font-family: var(--mono); }
 }
 .source-mode-fieldset strong { display: block; font-size: 13.5px; color: var(--ink); }
 .source-mode-fieldset small { display: block; color: var(--muted); font-size: 11.5px; font-weight: 400; margin-top: 2px; }
+@media (max-width: 560px) {
+  .source-mode-fieldset { grid-template-columns: 1fr; }
+}
 
 .project-source-builder { display: flex; flex-direction: column; gap: 10px; }
 .project-source-row { border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
@@ -2958,4 +2962,3 @@ code, pre { font-family: var(--mono); }
   opacity: 0;
   transform: translateY(-4px);
 }
-

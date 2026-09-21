@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import type {
   AiRun, AiScope, AiTokenSummary, Capability, CreatedAiToken, DesignReview, Feature, FeatureStatus, HealthResponse, Module, Project,
-  ProjectDetail, ProjectSourceKind, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary,
+  ProjectDetail, ProjectSourceKind, WorkflowMode, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary,
   SpecificationSummary, TaskCategory, TaskStatus, TaskType, RunPhase,
 } from '@forgeflow/contracts';
 import CapabilityProgress from './components/CapabilityProgress.vue';
@@ -73,6 +73,7 @@ const projectKey = ref('');
 const projectName = ref('');
 const projectDescription = ref('');
 const projectType = ref('GENERAL');
+const projectWorkflowMode = ref<WorkflowMode>('AUTO');
 const projectSourceMode = ref<'existing' | 'later'>('later');
 const projectSources = ref<ProjectSourceDraft[]>([]);
 const expandedProjectSourceId = ref<string | null>(null);
@@ -338,9 +339,9 @@ function capabilityVerificationLabel(capabilityId: string) {
   const run = (projectDetail.value?.runs ?? [])
     .filter((item) => taskIds.has(item.taskId))
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
-  if (!run) return '无证据';
+  if (!run) return '无 Run 记录';
   const label = verificationLabel(run);
-  return label === '—' ? '无证据' : label;
+  return label === '—' ? '无 Run 记录' : label;
 }
 function featureDesignLabel(featureId: string) {
   const design = projectDetail.value?.specifications.find((item) => item.featureId === featureId && item.kind === 'feature-design');
@@ -358,9 +359,9 @@ function featureVerificationLabel(featureId: string) {
   const runs = (projectDetail.value?.runs ?? [])
     .filter((item) => item.featureId === featureId)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  if (!runs[0]) return '无证据';
+  if (!runs[0]) return '无 Run 记录';
   const label = verificationLabel(runs[0]);
-  return label === '—' ? '无证据' : label;
+  return label === '—' ? '无 Run 记录' : label;
 }
 
 function moduleNameById(id: string): string {
@@ -778,6 +779,7 @@ function newProjectSource(): ProjectSourceDraft {
 }
 
 function openProjectDialog() {
+  projectWorkflowMode.value = 'AUTO';
   projectSourceMode.value = 'later';
   projectSources.value = [];
   expandedProjectSourceId.value = null;
@@ -816,14 +818,14 @@ async function createProject() {
   try {
     const project = await api<Project>('/api/projects', { method: 'POST', body: JSON.stringify({
       projectKey: projectKey.value, name: projectName.value, description: projectDescription.value, projectType: projectType.value,
-      workflowMode: 'CONTROLLED',
+      workflowMode: projectWorkflowMode.value,
       sources: projectSourceMode.value === 'existing' ? projectSources.value.map((source) => ({
         alias: source.alias, displayName: source.displayName, purpose: source.purpose, sourceKind: source.sourceKind,
         environmentKey: source.environmentKey, localRoot: source.localRoot, remoteUrl: source.remoteUrl || null,
         repoSubdir: source.repoSubdir || null, scope: null, idempotencyKey: `project-create-${source.clientId}`,
       })) : [],
     }) });
-    projectKey.value = ''; projectName.value = ''; projectDescription.value = ''; projectType.value = 'GENERAL';
+    projectKey.value = ''; projectName.value = ''; projectDescription.value = ''; projectType.value = 'GENERAL'; projectWorkflowMode.value = 'AUTO';
     projectSourceMode.value = 'later'; projectSources.value = []; expandedProjectSourceId.value = null; showProjectDialog.value = false;
     await loadWorkspace(); await selectProject(project.id); notice.value = '项目已创建';
   } catch (cause) { showError(cause); } finally { busy.value = false; }
@@ -1468,14 +1470,14 @@ onMounted(async () => {
                           <button class="feature-open" type="button" :title="feature.name" @click="openFeature(feature)"><span class="feature-copy"><strong>{{ feature.name }}</strong></span></button>
                         </div>
                         <div class="feature-metric"><small>状态</small><span class="status-text" :data-status="feature.status">{{ statusName(feature.status) }}</span></div>
-                        <div class="feature-metric tree-verification" :class="{ muted: featureVerificationLabel(feature.id) === '无证据' }"><span>{{ featureVerificationLabel(feature.id) }}</span></div>
+                        <div class="feature-metric tree-verification" :class="{ muted: featureVerificationLabel(feature.id) === '无 Run 记录' }"><span>{{ featureVerificationLabel(feature.id) }}</span></div>
                         <details class="tree-menu"><summary :aria-label="`${feature.name}的操作`">···</summary><div class="tree-menu-items"><button type="button" @click="editFeature(module, feature)">编辑功能</button><button type="button" class="danger-link-btn" @click.prevent="confirmDeleteFeature(feature)">删除功能</button></div></details>
                       </article>
                       <div v-if="capabilitiesForFeature(feature.id).length && (featureSearch.trim() || !collapsedFeatures.has(feature.id))" class="capability-list">
                         <button v-for="capability in visibleCapabilities(module, feature)" :key="capability.id" class="capability-row" type="button" :title="capability.name" @click="openFeature(feature, capability.id)">
                           <span class="capability-primary"><span class="capability-joint" aria-hidden="true"></span><span class="capability-copy"><strong>{{ capability.name }}</strong></span></span>
                           <span class="feature-metric"><small>状态</small><span class="status-text" :data-status="capability.status">{{ capabilityStatusName(capability.status) }}</span></span>
-                          <span class="feature-metric tree-verification" :class="{ muted: capabilityVerificationLabel(capability.id) === '无证据' }"><span>{{ capabilityVerificationLabel(capability.id) }}</span></span>
+                          <span class="feature-metric tree-verification" :class="{ muted: capabilityVerificationLabel(capability.id) === '无 Run 记录' }"><span>{{ capabilityVerificationLabel(capability.id) }}</span></span>
                           <span class="capability-enter" aria-hidden="true">→</span>
                         </button>
                       </div>
@@ -1517,7 +1519,7 @@ onMounted(async () => {
                   <div class="feature-card-stats">
                     <span class="stat-pill">{{ capabilitiesForFeature(feature.id).length }} 项能力</span>
                     <span class="stat-pill">{{ tasksForFeature(feature.id).length }} 个任务</span>
-                    <span class="stat-pill verification" :class="{ empty: featureVerificationLabel(feature.id) === '无证据' }">{{ featureVerificationLabel(feature.id) }}</span>
+                    <span class="stat-pill verification" :class="{ empty: featureVerificationLabel(feature.id) === '无 Run 记录' }">{{ featureVerificationLabel(feature.id) }}</span>
                   </div>
                   <div class="feature-card-footer">
                     <code class="feature-code">#{{ feature.code }}</code>
@@ -1559,7 +1561,7 @@ onMounted(async () => {
                       <div class="board-card-title">{{ feature.name }}</div>
                       <div class="board-card-meta">
                         <span>{{ capabilitiesForFeature(feature.id).length }} 能力</span>
-                        <span class="board-verification" :class="{ empty: featureVerificationLabel(feature.id) === '无证据' }">{{ featureVerificationLabel(feature.id) }}</span>
+                        <span class="board-verification" :class="{ empty: featureVerificationLabel(feature.id) === '无 Run 记录' }">{{ featureVerificationLabel(feature.id) }}</span>
                       </div>
                     </div>
                     <div v-if="!featuresForColumn(col).length" class="board-column-empty">
@@ -1655,6 +1657,12 @@ onMounted(async () => {
           </div>
           <label for="project-type">项目类型<input id="project-type" v-model="projectType" maxlength="80" required placeholder="例如：现代 Web 应用、音视频推理流水线" /></label>
           <label for="project-description">项目描述<textarea id="project-description" v-model="projectDescription" maxlength="1000" placeholder="说明项目目标与运行场景"></textarea></label>
+
+          <fieldset class="source-mode-fieldset">
+            <legend>工作流模式</legend>
+            <label :class="{ active: projectWorkflowMode === 'AUTO' }"><input v-model="projectWorkflowMode" type="radio" name="workflow-mode" value="AUTO" /><span><strong>自由记录</strong><small>任务可直接提交结果</small></span></label>
+            <label :class="{ active: projectWorkflowMode === 'CONTROLLED' }"><input v-model="projectWorkflowMode" type="radio" name="workflow-mode" value="CONTROLLED" /><span><strong>审查授权</strong><small>任务需人工授权与确认</small></span></label>
+          </fieldset>
 
           <fieldset class="source-mode-fieldset">
             <legend>源码接入方式</legend>
