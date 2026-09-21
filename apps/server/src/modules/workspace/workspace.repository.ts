@@ -204,6 +204,11 @@ export class WorkspaceRepository {
       .where(and(eq(engineeringAssetRevisions.assetId, assetId), eq(engineeringAssetRevisions.id, revisionId))).get();
   }
 
+  findEngineeringAssetRevisionById(revisionId: string) {
+    return this.connection.db.select().from(engineeringAssetRevisions)
+      .where(eq(engineeringAssetRevisions.id, revisionId)).get();
+  }
+
   insertTraceLink(link: typeof traceLinks.$inferInsert) {
     this.connection.db.insert(traceLinks).values(link).run();
   }
@@ -377,6 +382,11 @@ export class WorkspaceRepository {
   findRevision(specId: string, revisionId: string) {
     return this.connection.db.select().from(specificationRevisions)
       .where(and(eq(specificationRevisions.specId, specId), eq(specificationRevisions.id, revisionId))).get();
+  }
+
+  findRevisionById(revisionId: string) {
+    return this.connection.db.select().from(specificationRevisions)
+      .where(eq(specificationRevisions.id, revisionId)).get();
   }
 
   listRevisions(specId: string) {

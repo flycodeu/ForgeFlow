@@ -345,13 +345,14 @@ export class WorkspaceService {
     return engineeringAssetView(asset, revision);
   }
 
-  private buildDesignSnapshot(projectId: string, featureId: string, task?: NonNullable<ReturnType<WorkspaceRepository['findTaskById']>>): RunDesignSnapshot {
+  private buildDesignSnapshot(projectId: string, featureId: string,
+    task?: NonNullable<ReturnType<WorkspaceRepository['findTaskById']>>, preferTaskRevision = true): RunDesignSnapshot {
     const project = this.requireProject(projectId);
     const specifications = this.repository.listSpecifications(projectId).map(({ specification }) => specification)
       .filter((specification) => specification.featureId === null || (specification.featureId === featureId
         && (specification.capabilityId === null || specification.capabilityId === task?.capabilityId)))
       .flatMap((specification) => {
-        const taskRevision = task?.designRevisionId
+        const taskRevision = preferTaskRevision && task?.designRevisionId
           ? this.repository.findRevision(specification.id, task.designRevisionId)
           : undefined;
         const revisionId = taskRevision?.id
@@ -374,7 +375,7 @@ export class WorkspaceService {
       return { status: 'UNKNOWN' as const, warnings: ['历史 Run 未冻结设计快照'] };
     }
     const task = this.repository.findTaskById(run.taskId);
-    const current = this.buildDesignSnapshot(run.projectId, run.featureId, task);
+    const current = this.buildDesignSnapshot(run.projectId, run.featureId, task, false);
     const warnings: string[] = [];
     const snapshotSpecs = new Map(snapshot.specifications.map((item) => [item.specId, item.revisionId]));
     const currentSpecs = new Map(current.specifications.map((item) => [item.specId, item.revisionId]));
@@ -685,6 +686,12 @@ export class WorkspaceService {
       modules: detail.modules,
       features: detail.features,
       capabilities: detail.capabilities,
+      sourceAnalyses: detail.sourceAnalyses.map((analysis) => ({
+        id: analysis.id, status: analysis.status, requestedSourceIds: analysis.requestedSourceIds,
+        requestedAt: analysis.requestedAt, completedAt: analysis.completedAt,
+        summary: analysis.summary?.slice(0, 500) ?? null,
+      })),
+      archiveIndex: { documents: `/api/projects/${projectId}/archive/documents`, work: `/api/projects/${projectId}/archive/events` },
       unfinishedTasks: detail.tasks.filter((task) => task.status !== 'CONFIRMED').map((task) => ({
         id: task.id, featureId: task.featureId, code: task.code, name: task.name, type: task.type,
         category: task.category, area: task.area,
@@ -728,6 +735,12 @@ export class WorkspaceService {
       modules: detail.modules,
       features: featureDesigns,
       capabilities: detail.capabilities,
+      sourceAnalyses: detail.sourceAnalyses.map((analysis) => ({
+        id: analysis.id, status: analysis.status, requestedSourceIds: analysis.requestedSourceIds,
+        requestedAt: analysis.requestedAt, completedAt: analysis.completedAt,
+        summary: analysis.summary?.slice(0, 500) ?? null,
+      })),
+      archiveIndex: { documents: `/api/projects/${projectId}/archive/documents`, work: `/api/projects/${projectId}/archive/events` },
       tasks: detail.tasks.map((task) => ({
         id: task.id, featureId: task.featureId, code: task.code, name: task.name, type: task.type,
         category: task.category, area: task.area,
@@ -735,7 +748,7 @@ export class WorkspaceService {
       })),
       planningProcess: '按当前工作需要参考已有资料与实际代码，自主选择调研、设计、实现和验证顺序。保留原有文档格式；可扩展或修正设计，并通过项目档案记录计划、变化、结果和未验证范围，不要求补齐固定章节。',
       planningBoundary: detail.project.workflowMode === 'AUTO'
-        ? 'AUTO：AI 可创建 Revision、Capability、Task 并直接执行；PASS 自动完成。不得假设存在数据库、HTTP API、UI、Frontend 或 Backend。'
+        ? 'AUTO：AI 可创建 Revision、Capability、Task 并直接执行；AI 报告 PASS 只结束实施任务，不构成当前核验或负责人验收。不得假设存在数据库、HTTP API、UI、Frontend 或 Backend。'
         : 'CONTROLLED：保留 Design Review、Approved Baseline、Authorization 和人工确认。不得假设存在数据库、HTTP API、UI、Frontend 或 Backend。',
     };
   }
@@ -914,9 +927,17 @@ export class WorkspaceService {
     const designed = detail.capabilities.filter((item) => item.status !== 'DRAFT').length;
     const done = detail.capabilities.filter((item) => item.status === 'DONE').length;
     const blocked = detail.capabilities.filter((item) => item.status === 'BLOCKED').length;
-    const passedCapabilityIds = new Set(detail.tasks.filter((task) => task.capabilityId).filter((task) =>
-      detail.runs.some((run) => run.taskId === task.id && run.verificationSummary?.status.toUpperCase() === 'PASS'))
-      .map((task) => task.capabilityId!));
+    const passedCapabilityIds = new Set(detail.capabilities.filter((capability) => {
+      const taskIds = new Set(detail.tasks.filter((task) => task.capabilityId === capability.id).map((task) => task.id));
+      const latest = detail.runs.filter((run) => taskIds.has(run.taskId) && run.verificationSummary)
+        .sort((left, right) => Date.parse(right.submittedAt ?? right.startedAt) - Date.parse(left.submittedAt ?? left.startedAt))[0];
+      return latest?.status === 'SUBMITTED' && latest.designSnapshotStatus === 'CURRENT'
+        && latest.verificationSummary?.evidenceStatus === 'VERIFIED'
+        && latest.verificationSummary.origin === 'CI'
+        && latest.verificationSummary.reportedStatus === 'PASS';
+    }).map((capability) => capability.id));
+    const accepted = detail.capabilities.filter((capability) =>
+      detail.features.some((feature) => feature.id === capability.featureId && feature.status === 'ACCEPTED')).length;
     const engineeringCount = detail.engineeringAssets.filter((asset) => asset.kind !== 'PROJECT_DOCUMENT').length;
     const research = documentStage('research', 'research');
     const requirements = documentStage('requirements', 'requirements');
@@ -929,8 +950,8 @@ export class WorkspaceService {
       { key: 'breakdown', label: '功能分解', status: blocked ? 'ISSUE' : total === 0 ? 'NOT_STARTED' : designed ? 'FORMED' : 'IN_PROGRESS', summary: `${total} 个能力项`, target: 'features' },
       { key: 'engineering', label: '工程详细设计', status: blocked ? 'ISSUE' : engineeringCount === 0 ? 'NOT_STARTED' : detail.features.every((feature) => detail.engineeringAssets.some((asset) => asset.featureId === feature.id)) ? 'FORMED' : 'IN_PROGRESS', summary: `${engineeringCount} 个工程设计`, target: 'features' },
       { key: 'implementation', label: '实施', status: blocked ? 'ISSUE' : total === 0 ? 'NOT_STARTED' : done === total ? 'FORMED' : detail.capabilities.some((item) => ['IMPLEMENTING', 'TESTING', 'DONE'].includes(item.status)) ? 'IN_PROGRESS' : 'NOT_STARTED', summary: `${done} / ${total} 已完成`, target: 'development' },
-      { key: 'verification', label: '验证', status: blocked ? 'ISSUE' : total === 0 ? 'NOT_STARTED' : passedCapabilityIds.size === total ? 'FORMED' : passedCapabilityIds.size ? 'IN_PROGRESS' : 'NOT_STARTED', summary: `${passedCapabilityIds.size} / ${total} 通过`, target: 'testing' },
-      { key: 'complete', label: '完成', status: total > 0 && done === total && passedCapabilityIds.size === total ? 'FORMED' : blocked ? 'ISSUE' : 'NOT_STARTED', summary: total > 0 && done === total ? '能力已完成' : '尚未完成', target: 'overview' },
+      { key: 'verification', label: '当前设计核验', status: blocked ? 'ISSUE' : total === 0 ? 'NOT_STARTED' : passedCapabilityIds.size === total ? 'FORMED' : passedCapabilityIds.size ? 'IN_PROGRESS' : 'NOT_STARTED', summary: `${passedCapabilityIds.size} / ${total} 有当前核验`, target: 'testing' },
+      { key: 'complete', label: '负责人验收', status: total > 0 && done === total && passedCapabilityIds.size === total && accepted === total ? 'FORMED' : blocked ? 'ISSUE' : 'NOT_STARTED', summary: `${accepted} / ${total} 已验收`, target: 'overview' },
     ];
     const currentStage = (stages.find((stage) => stage.status === 'ISSUE')
       ?? stages.find((stage) => stage.status === 'IN_PROGRESS')
@@ -1193,8 +1214,13 @@ export class WorkspaceService {
 
   createTraceLink(projectId: string, input: { sourceType: string; sourceId: string; targetType: string; targetId: string; relation: string }): TraceLink {
     this.requireProject(projectId);
-    const link = { id: randomUUID(), projectId, sourceType: input.sourceType.trim().toUpperCase(), sourceId: input.sourceId,
-      targetType: input.targetType.trim().toUpperCase(), targetId: input.targetId, relation: input.relation.trim().toUpperCase(), createdAt: new Date() };
+    const link = { id: randomUUID(), projectId, sourceType: input.sourceType.trim().toUpperCase(), sourceId: input.sourceId.trim(),
+      targetType: input.targetType.trim().toUpperCase(), targetId: input.targetId.trim(), relation: input.relation.trim().toUpperCase(), createdAt: new Date() };
+    for (const [type, id] of [[link.sourceType, link.sourceId], [link.targetType, link.targetId]]) {
+      if (!this.traceNodeExists(projectId, type!, id!)) {
+        throw new ApiError(400, 'TRACE_NODE_INVALID', `追溯节点不存在、不属于当前项目或类型不匹配：${type}`);
+      }
+    }
     try { this.repository.insertTraceLink(link); }
     catch (error) {
       if (isUniqueConstraint(error)) {
@@ -1205,6 +1231,28 @@ export class WorkspaceService {
       throw error;
     }
     return traceLinkView(link);
+  }
+
+  private traceNodeExists(projectId: string, type: string, id: string): boolean {
+    if (!id) return false;
+    if (type === 'SOURCE') return Boolean(this.repository.findProjectSource(projectId, id));
+    if (type === 'MODULE') return Boolean(this.repository.findModule(projectId, id));
+    if (type === 'FEATURE') return Boolean(this.repository.findFeature(projectId, id));
+    if (type === 'CAPABILITY') return Boolean(this.repository.findCapability(projectId, id));
+    if (type === 'TASK') return this.repository.findTaskById(id)?.projectId === projectId;
+    if (type === 'RUN') return Boolean(this.repository.findRun(projectId, id));
+    if (type === 'SPECIFICATION') return Boolean(this.repository.findSpecification(projectId, id));
+    if (type === 'REQUIREMENT_REVISION' || type === 'SPECIFICATION_REVISION') {
+      const revision = this.repository.findRevisionById(id);
+      const specification = revision && this.repository.findSpecification(projectId, revision.specId);
+      return Boolean(specification && (type !== 'REQUIREMENT_REVISION' || specification.kind === 'requirements'));
+    }
+    if (type === 'ENGINEERING_ASSET_REVISION') {
+      const revision = this.repository.findEngineeringAssetRevisionById(id);
+      return Boolean(revision && this.repository.findEngineeringAsset(projectId, revision.assetId));
+    }
+    const asset = this.repository.findEngineeringAsset(projectId, id);
+    return Boolean(asset && (type === 'ENGINEERING_ASSET' || asset.kind === type));
   }
 
   getFeatureEngineeringBlueprint(projectId: string, featureId: string): FeatureEngineeringBlueprint {
@@ -1960,7 +2008,7 @@ export class WorkspaceService {
     const featureCapabilities = this.repository.listCapabilities(feature.projectId, featureId);
     let status: FeatureStatus = 'DRAFT';
     if (featureCapabilities.length > 0) {
-      if (featureCapabilities.every((item) => item.status === 'DONE')) status = 'DELIVERED';
+      if (featureCapabilities.every((item) => item.status === 'DONE')) status = 'VERIFYING';
       else if (featureCapabilities.some((item) => item.status === 'TESTING')) status = 'VERIFYING';
       else if (featureCapabilities.some((item) => ['IMPLEMENTING', 'BLOCKED', 'DONE'].includes(item.status))) status = 'IMPLEMENTING';
       else if (featureCapabilities.every((item) => item.status === 'DESIGNED')) status = 'READY';

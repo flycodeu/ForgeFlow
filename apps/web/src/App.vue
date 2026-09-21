@@ -153,7 +153,7 @@ const featureStatuses: { value: FeatureStatus; label: string }[] = [
   { value: 'DRAFT', label: '草稿' }, { value: 'DESIGNING', label: '设计中' },
   { value: 'READY', label: '待实施' }, { value: 'IMPLEMENTING', label: '实施中' },
   { value: 'VERIFYING', label: '验证中' }, { value: 'ACCEPTANCE_PENDING', label: '待验收' },
-  { value: 'ACCEPTED', label: '已验收' }, { value: 'DELIVERED', label: '已交付' },
+  { value: 'ACCEPTED', label: '已验收' }, { value: 'DELIVERED', label: '交付标记（待核对）' },
 ];
 const taskTypes: { value: TaskType; label: string }[] = [
   { value: 'DESIGN', label: '设计' }, { value: 'BACKEND', label: 'Backend' },
@@ -385,8 +385,10 @@ const featureBoardColumns = [
   { key: 'DRAFT', label: '草稿', color: 'dot-draft', statuses: ['DRAFT'] },
   { key: 'DESIGNING', label: '设计中', color: 'dot-design', statuses: ['DESIGNING'] },
   { key: 'READY', label: '待实施', color: 'dot-ready', statuses: ['READY'] },
-  { key: 'IMPLEMENTING', label: '实现中', color: 'dot-impl', statuses: ['IMPLEMENTING', 'VERIFYING'] },
-  { key: 'DONE', label: '已完成 / 已交付', color: 'dot-done', statuses: ['ACCEPTANCE_PENDING', 'ACCEPTED', 'DELIVERED'] },
+  { key: 'IMPLEMENTING', label: '实现中', color: 'dot-impl', statuses: ['IMPLEMENTING'] },
+  { key: 'VERIFYING', label: '核验 / 待验收', color: 'dot-ready', statuses: ['VERIFYING', 'ACCEPTANCE_PENDING'] },
+  { key: 'ACCEPTED', label: '已验收', color: 'dot-done', statuses: ['ACCEPTED'] },
+  { key: 'DELIVERED', label: '历史交付标记', color: 'dot-ready', statuses: ['DELIVERED'] },
 ];
 
 function featuresForColumn(col: { statuses: string[] }) {
@@ -394,7 +396,7 @@ function featuresForColumn(col: { statuses: string[] }) {
 }
 
 function statusBadgeClass(status: string) {
-  if (['ACCEPTED', 'DELIVERED'].includes(status)) return 'pass';
+  if (status === 'ACCEPTED') return 'pass';
   if (['IMPLEMENTING', 'READY'].includes(status)) return 'active';
   if (status === 'DESIGNING') return 'design';
   return '';

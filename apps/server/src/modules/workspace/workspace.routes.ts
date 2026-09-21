@@ -23,6 +23,7 @@ type ReviewParams = ProjectParams & { reviewId: string };
 const FEATURE_STATUSES: readonly FeatureStatus[] = [
   'DRAFT', 'DESIGNING', 'READY', 'IMPLEMENTING', 'VERIFYING', 'ACCEPTANCE_PENDING', 'ACCEPTED', 'DELIVERED',
 ];
+const OWNER_FEATURE_STATUSES: readonly FeatureStatus[] = ['ACCEPTANCE_PENDING', 'ACCEPTED', 'DELIVERED'];
 const TASK_TYPES: readonly TaskType[] = ['DESIGN', 'BACKEND', 'FRONTEND', 'INTEGRATION', 'VERIFICATION', 'OTHER'];
 const TASK_CATEGORIES: readonly TaskCategory[] = ['DESIGN', 'IMPLEMENTATION', 'INTEGRATION', 'VERIFICATION', 'MIGRATION', 'CONTENT', 'OTHER'];
 const TASK_STATUSES: readonly TaskStatus[] = ['PLANNED', 'AUTHORIZED', 'RUNNING', 'SUBMITTED', 'CONFIRMED', 'DONE', 'BLOCKED'];
@@ -368,12 +369,14 @@ export function registerWorkspaceRoutes(app: FastifyInstance, service: Workspace
   app.post<{ Params: ProjectParams }>('/api/projects/:projectId/features', async (request, reply) => {
     await auth.require(request, 'spec:write', true);
     const body = bodyObject(request.body);
+    const status = statusField(body, true)!;
+    if (OWNER_FEATURE_STATUSES.includes(status)) await auth.require(request, 'owner', true);
     return reply.code(201).send(service.createFeature(request.params.projectId, {
       moduleId: textField(body, 'moduleId', '所属模块', 64),
       code: codeField(body, 'code', '功能编号', true)!,
       name: textField(body, 'name', '功能名称', 120),
       summary: optionalTextField(body, 'summary', '功能摘要', 1000, true) ?? '',
-      status: statusField(body, true)!,
+      status,
       sortOrder: sortOrderField(body, true)!,
     }));
   });
@@ -392,12 +395,14 @@ export function registerWorkspaceRoutes(app: FastifyInstance, service: Workspace
   app.patch<{ Params: FeatureParams }>('/api/projects/:projectId/features/:featureId', async (request) => {
     await auth.require(request, 'spec:write', true);
     const body = bodyObject(request.body);
+    const status = statusField(body, false);
+    if (status && OWNER_FEATURE_STATUSES.includes(status)) await auth.require(request, 'owner', true);
     return service.updateFeature(request.params.projectId, request.params.featureId, {
       moduleId: optionalTextField(body, 'moduleId', '所属模块', 64),
       code: codeField(body, 'code', '功能编号', false),
       name: optionalTextField(body, 'name', '功能名称', 120),
       summary: optionalTextField(body, 'summary', '功能摘要', 1000, true),
-      status: statusField(body, false),
+      status,
       sortOrder: sortOrderField(body, false),
     });
   });

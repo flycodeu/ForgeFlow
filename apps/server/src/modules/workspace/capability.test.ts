@@ -8,11 +8,15 @@ import type {
   Project, ProjectLifecycle, Task,
 } from '@forgeflow/contracts';
 import { createApp } from '../../app.js';
+import { openDatabase } from '../../db/client.js';
+import { WorkspaceRepository } from './workspace.repository.js';
+import { WorkspaceService } from './workspace.service.js';
 
 test('AUTO Capability flow adapts design, executes without authorization, and rolls up real progress', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'forgeflow-capability-'));
   const app = createApp(join(directory, 'forgeflow.db'));
-  t.after(async () => { await app.close(); rmSync(directory, { recursive: true, force: true }); });
+  let connection: ReturnType<typeof openDatabase> | null = null;
+  t.after(async () => { await app.close(); connection?.sqlite.close(); rmSync(directory, { recursive: true, force: true }); });
 
   const rest = async <T>(method: 'GET' | 'POST', url: string, payload?: object) => {
     const response = await app.inject({ method, url, payload });
@@ -78,7 +82,52 @@ test('AUTO Capability flow adapts design, executes without authorization, and ro
   assert.equal(finished.runs[0]?.verificationSummary?.status, 'PASS');
   const lifecycle = await rest<ProjectLifecycle>('GET', `${base}/lifecycle`);
   assert.equal(lifecycle.stages.find((stage) => stage.key === 'implementation')?.summary, '1 / 1 已完成');
-  assert.equal(lifecycle.stages.find((stage) => stage.key === 'verification')?.summary, '1 / 1 通过');
+  assert.equal(lifecycle.stages.find((stage) => stage.key === 'verification')?.summary, '0 / 1 有当前核验');
+  assert.equal(lifecycle.stages.find((stage) => stage.key === 'complete')?.summary, '0 / 1 已验收');
+  assert.equal((await rest<Feature>('GET', `${base}/features/${feature.id}`)).status, 'VERIFYING');
+  const aiAcceptance = await app.inject({ method: 'PATCH', url: `${base}/features/${feature.id}`,
+    headers: { authorization: `Bearer ${token.token}` }, payload: { status: 'ACCEPTED' } });
+  assert.equal(aiAcceptance.statusCode, 403);
+
+  const verificationTask = async (code: string) => {
+    const item = await rest<Task>('POST', `${base}/features/${feature.id}/tasks`, {
+      code, name: code, type: 'VERIFICATION', category: 'VERIFICATION', capabilityId: capability.id,
+      objective: '核对当前能力', status: 'PLANNED', sortOrder: 20,
+    });
+    const execution = await rest<AiRun>('POST', `${base}/features/${feature.id}/tasks/${item.id}/runs`, { baseCommit: null });
+    return execution;
+  };
+  const humanRun = await verificationTask('HUMAN_CHECK');
+  await rest<AiRun>('POST', `${base}/runs/${humanRun.id}/submit`, { summary: '人工报告测试通过', resultCommit: null,
+    changedFiles: [], verificationSummary: { status: 'PASS', summary: '人工报告' }, issues: [] });
+  assert.equal((await rest<ProjectLifecycle>('GET', `${base}/lifecycle`)).stages.find((stage) => stage.key === 'verification')?.summary,
+    '0 / 1 有当前核验');
+
+  connection = openDatabase(join(directory, 'forgeflow.db'));
+  const workspace = new WorkspaceService(new WorkspaceRepository(connection));
+  const ciRun = await verificationTask('CI_CHECK');
+  workspace.submitRun(project.id, ciRun.id, { summary: 'CI 校验', resultCommit: null, changedFiles: [],
+    verificationSummary: { reportedStatus: 'PASS', summary: 'CI PASS', origin: 'CI' }, issues: [] });
+  assert.equal((await rest<ProjectLifecycle>('GET', `${base}/lifecycle`)).stages.find((stage) => stage.key === 'verification')?.summary,
+    '1 / 1 有当前核验');
+
+  const failedRun = await verificationTask('CI_FAILURE');
+  workspace.submitRun(project.id, failedRun.id, { summary: 'CI 失败', resultCommit: null, changedFiles: [],
+    verificationSummary: { reportedStatus: 'FAIL', summary: 'CI FAIL', origin: 'CI' }, issues: [] });
+  assert.equal((await rest<ProjectLifecycle>('GET', `${base}/lifecycle`)).stages.find((stage) => stage.key === 'verification')?.summary,
+    '0 / 1 有当前核验');
+
+  const recoveredRun = await verificationTask('CI_RECOVERY');
+  workspace.submitRun(project.id, recoveredRun.id, { summary: 'CI 恢复', resultCommit: null, changedFiles: [],
+    verificationSummary: { reportedStatus: 'PASS', summary: 'CI PASS', origin: 'CI' }, issues: [] });
+  assert.equal((await rest<ProjectLifecycle>('GET', `${base}/lifecycle`)).stages.find((stage) => stage.key === 'verification')?.summary,
+    '1 / 1 有当前核验');
+  await rest('POST', `${base}/specifications/${context.design!.specification.id}/revisions`, {
+    content: '# 功能目标\n修订新增用户行为和验收条件。', changeSummary: '更新设计后需重新核验',
+    expectedHeadRevisionId: context.design!.latestRevision!.id,
+  });
+  assert.equal((await rest<ProjectLifecycle>('GET', `${base}/lifecycle`)).stages.find((stage) => stage.key === 'verification')?.summary,
+    '0 / 1 有当前核验');
 
   for (const sample of [
     { key: 'GODOT', type: 'Godot 4.4 2D', profile: 'game', name: '使用物品', include: /Scene \/ Node/, exclude: /API \/ 协议|Controller|数据库表/ },

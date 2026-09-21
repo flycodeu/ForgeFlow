@@ -11,21 +11,32 @@ const features = computed(() => props.detail.features.slice().sort((a, b) => a.s
 const runsWithVerification = computed(() =>
   props.detail.runs
     .filter((run) => run.verificationSummary)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    .sort((a, b) => runTime(b) - runTime(a)),
 );
 
-const totalVerificationRuns = computed(() => runsWithVerification.value.length);
-const passedRuns = computed(() => runsWithVerification.value.filter((run) => run.verificationSummary?.status === 'PASS').length);
+function runTime(run: AiRun) {
+  return new Date(run.finishedAt ?? run.submittedAt ?? run.createdAt).getTime();
+}
+const latestByTask = computed(() => new Map(runsWithVerification.value.slice().reverse().map((run) => [run.taskId, run])));
+function isCurrentVerified(run: AiRun) {
+  return run.designSnapshotStatus === 'CURRENT' && run.verificationSummary?.origin === 'CI'
+    && run.verificationSummary.evidenceStatus === 'VERIFIED';
+}
+const currentChecks = computed(() => [...latestByTask.value.values()].filter((run) =>
+  isCurrentVerified(run) && ['PASS', 'FAIL', 'ERROR'].includes(run.verificationSummary!.reportedStatus),
+));
+const totalVerificationRuns = computed(() => currentChecks.value.length);
+const passedRuns = computed(() => currentChecks.value.filter((run) => run.verificationSummary?.reportedStatus === 'PASS').length);
 const passRate = computed(() =>
   totalVerificationRuns.value ? Math.round((passedRuns.value / totalVerificationRuns.value) * 100) : null,
 );
 
 const acceptedFeatures = computed(() =>
-  features.value.filter((f) => ['ACCEPTED', 'DELIVERED'].includes(f.status)).length,
+  features.value.filter((f) => f.status === 'ACCEPTED').length,
 );
 
 const pendingFeatures = computed(() =>
-  features.value.filter((f) => ['VERIFYING', 'ACCEPTANCE_PENDING'].includes(f.status)).length,
+  features.value.filter((f) => f.status === 'ACCEPTANCE_PENDING').length,
 );
 
 const totalIssues = computed(() =>
@@ -41,9 +52,7 @@ function capabilitiesOf(featureId: string) {
 }
 
 function latestRunOf(featureId: string) {
-  return props.detail.runs
-    .filter((r) => r.featureId === featureId && r.verificationSummary)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  return runsWithVerification.value.find((run) => run.featureId === featureId);
 }
 
 function featureStatusLabel(status: FeatureStatus) {
@@ -55,7 +64,7 @@ function featureStatusLabel(status: FeatureStatus) {
     VERIFYING: '验证中',
     ACCEPTANCE_PENDING: '待验收',
     ACCEPTED: '已验收',
-    DELIVERED: '已交付',
+    DELIVERED: '交付标记（待核对）',
   };
   return map[status] ?? status;
 }
@@ -73,7 +82,20 @@ function runStatusLabel(status: RunReportedStatus) {
 function evidenceLabel(run: AiRun | undefined) {
   const evidence = run?.verificationSummary;
   if (!evidence) return '未记录';
-  return `${evidence.origin === 'AI_REPORTED' ? 'AI 报告' : '证据'}${runStatusLabel(evidence.reportedStatus)}`;
+  const source = { AI_REPORTED: 'AI 自报', LOCAL_CAPTURED: '本地采集', CI: 'CI 核验', HUMAN: '人工报告' }[evidence.origin];
+  return `${source} · ${runStatusLabel(evidence.reportedStatus)}`;
+}
+function evidenceContext(run: AiRun) {
+  if (run.designSnapshotStatus === 'STALE') return '设计已变更 · 历史记录';
+  if (run.designSnapshotStatus === 'UNKNOWN') return '设计版本未知 · 不计当前核验';
+  if (latestByTask.value.get(run.taskId)?.id !== run.id) return '较早记录 · 不计当前核验';
+  if (isCurrentVerified(run)) return '当前设计 · CI 核验';
+  return '当前设计 · 未核验';
+}
+function verifiedTone(run: AiRun) {
+  if (latestByTask.value.get(run.taskId)?.id !== run.id || !isCurrentVerified(run)) return '';
+  return run.verificationSummary?.reportedStatus === 'PASS' ? 'pass'
+    : ['FAIL', 'ERROR'].includes(run.verificationSummary?.reportedStatus ?? '') ? 'fail' : '';
 }
 
 function formatTime(iso: string) {
@@ -93,9 +115,9 @@ function formatTime(iso: string) {
 
     <div class="testing-kpis-grid">
       <div class="kpi-card">
-        <span class="kpi-label">验证通过率</span>
+        <span class="kpi-label">当前 CI 核验通过率</span>
         <strong class="kpi-value">{{ passRate === null ? '—' : `${passRate}%` }}</strong>
-        <span class="kpi-meta">{{ totalVerificationRuns ? `${passedRuns} / ${totalVerificationRuns} 项通过` : '尚无验证证据' }}</span>
+        <span class="kpi-meta">{{ totalVerificationRuns ? `${passedRuns} / ${totalVerificationRuns} 项任务通过` : '暂无当前设计的 CI 核验' }}</span>
       </div>
       <div class="kpi-card">
         <span class="kpi-label">待验收功能</span>
@@ -103,13 +125,13 @@ function formatTime(iso: string) {
         <span class="kpi-meta">{{ features.length }} 项</span>
       </div>
       <div class="kpi-card">
-        <span class="kpi-label">已验收交付</span>
+        <span class="kpi-label">已验收功能</span>
         <strong class="kpi-value success-stat">{{ acceptedFeatures }}</strong>
       </div>
       <div class="kpi-card">
-        <span class="kpi-label">未解决问题</span>
+        <span class="kpi-label">执行记录问题项</span>
         <strong class="kpi-value" :class="{ warn: totalIssues > 0 }">{{ totalIssues }}</strong>
-        <span class="kpi-meta">{{ totalIssues ? `${totalIssues} 项待修复` : (totalVerificationRuns ? '无阻塞问题' : '尚未验证') }}</span>
+        <span class="kpi-meta">{{ totalIssues ? '含历史记录，未判断是否解决' : '暂无问题记录' }}</span>
       </div>
     </div>
 
@@ -136,7 +158,7 @@ function formatTime(iso: string) {
     <section v-if="activeTab === 'acceptance'" class="surface matrix-card">
       <div class="qa-table-head">
         <span>功能</span>
-        <span>最新验证证据</span>
+        <span>最近执行报告</span>
         <span>验收状态</span>
         <span>操作</span>
       </div>
@@ -159,13 +181,12 @@ function formatTime(iso: string) {
             <template v-if="latestRunOf(feature.id)?.verificationSummary">
               <span
                 class="test-badge"
-                :class="{
-                  pass: latestRunOf(feature.id)?.verificationSummary?.status === 'PASS',
-                  fail: latestRunOf(feature.id)?.verificationSummary?.status === 'FAIL',
-                }"
+                :class="verifiedTone(latestRunOf(feature.id)!)"
+                :title="latestRunOf(feature.id)?.verificationSummary?.summary"
               >
                 {{ evidenceLabel(latestRunOf(feature.id)) }}
               </span>
+              <small class="evidence-note">{{ evidenceContext(latestRunOf(feature.id)!) }}</small>
             </template>
             <span v-else class="test-empty">暂无核验记录</span>
           </div>
@@ -212,14 +233,11 @@ function formatTime(iso: string) {
           <div class="run-cell-verdict">
             <span
               class="test-badge"
-              :class="{
-                pass: run.verificationSummary?.status === 'PASS',
-                fail: run.verificationSummary?.status === 'FAIL',
-              }"
+              :class="verifiedTone(run)"
             >
               {{ evidenceLabel(run) }}
             </span>
-            <small>{{ run.verificationSummary?.summary }}</small>
+            <small :title="run.verificationSummary?.summary">{{ evidenceContext(run) }} · {{ run.verificationSummary?.summary }}</small>
           </div>
           <div class="run-cell-files">
             <span>{{ run.changedFiles.length }} 个文件</span>
@@ -355,9 +373,7 @@ function formatTime(iso: string) {
   align-items: center;
   gap: 16px;
   width: 100%;
-  height: 52px;
-  min-height: 52px;
-  max-height: 52px;
+  min-height: 64px;
   padding: 0 20px;
   box-sizing: border-box;
   border-bottom: 1px solid var(--surface-subtle);
@@ -401,8 +417,11 @@ function formatTime(iso: string) {
 }
 .cell-test {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -416,7 +435,11 @@ function formatTime(iso: string) {
   font-size: 11.5px;
   font-weight: 600;
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+.evidence-note { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
 .test-badge.pass {
   background: #dcfce7;
   color: #15803d;
@@ -465,8 +488,7 @@ function formatTime(iso: string) {
   background: #fffbeb;
   color: #92400e;
 }
-.feature-status-pill[data-status="ACCEPTED"],
-.feature-status-pill[data-status="DELIVERED"] {
+.feature-status-pill[data-status="ACCEPTED"] {
   border-color: color-mix(in srgb, #16a34a 25%, transparent);
   background: #f0fdf4;
   color: #15803d;
@@ -544,8 +566,11 @@ function formatTime(iso: string) {
 }
 .run-cell-verdict {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;

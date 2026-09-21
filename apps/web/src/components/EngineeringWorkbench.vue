@@ -4,6 +4,7 @@ import type {
   AiRun, Capability, CapabilityDetail, EngineeringAsset, EngineeringAssetRevision, Feature, FeatureEngineeringBlueprint, Project, ProjectDetail, SpecificationDetail, Task, TraceLink,
 } from '@forgeflow/contracts';
 import { api as getJson } from '../api-client';
+import ArchiveMarkdown from './ArchiveMarkdown.vue';
 
 type NavFolder = { kind: string; label: string };
 type NavGroup = { key: string; label: string; folders: NavFolder[] };
@@ -74,8 +75,15 @@ const capabilityRuns = computed(() => {
   const ids = new Set(capabilityTasks.value.map((item) => item.id));
   return runs.value.filter((item) => ids.has(item.taskId));
 });
-const designSections = computed(() => parseMarkdown(capabilityDetail.value?.design?.latestRevision?.content ?? ''));
-const featureDesignSections = computed(() => parseMarkdown(featureDesign.value?.latestRevision?.content ?? ''));
+function currentCheckCount(capabilityId: string) {
+  const taskIds = new Set(tasks.value.filter((task) => task.capabilityId === capabilityId).map((task) => task.id));
+  const latest = new Map(runs.value.filter((run) => taskIds.has(run.taskId) && run.verificationSummary)
+    .sort((a, b) => new Date(a.finishedAt ?? a.createdAt).getTime() - new Date(b.finishedAt ?? b.createdAt).getTime())
+    .map((run) => [run.taskId, run]));
+  return [...latest.values()].filter((run) => run.designSnapshotStatus === 'CURRENT'
+    && run.verificationSummary?.origin === 'CI' && run.verificationSummary.evidenceStatus === 'VERIFIED'
+    && run.verificationSummary.reportedStatus === 'PASS').length;
+}
 const traceLinks = computed(() => {
   const ids = new Set([selectedId.value, ...capabilityTasks.value.map((item) => item.id), ...capabilityRuns.value.map((item) => item.id)]);
   return (blueprint.value?.traceLinks ?? []).filter((item) => ids.has(item.sourceId) || ids.has(item.targetId));
@@ -98,7 +106,7 @@ function capabilityLabel(status: Capability['status']) {
   return { DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中', TESTING: '验证中', DONE: '已完成', BLOCKED: '受阻' }[status];
 }
 function featureStatusLabel(status: Feature['status']) {
-  return { DRAFT: '草稿', DESIGNING: '设计中', READY: '待实施', IMPLEMENTING: '实现中', VERIFYING: '验证中', ACCEPTANCE_PENDING: '待验收', ACCEPTED: '已验收', DELIVERED: '已交付' }[status];
+  return { DRAFT: '草稿', DESIGNING: '设计中', READY: '待实施', IMPLEMENTING: '实现中', VERIFYING: '验证中', ACCEPTANCE_PENDING: '待验收', ACCEPTED: '已验收', DELIVERED: '交付标记（待核对）' }[status];
 }
 function assetKindLabel(kind: string) {
   const labels: Record<string, string> = {
@@ -155,19 +163,6 @@ function buildTables(data: Record<string, unknown>): TableData[] {
     result.push({ title: singularTitle(key), columns: columns.map(keyLabel), rows: objects.map((item) => columns.map((column) => valueText(item[column]))) });
   }
   return result;
-}
-function parseMarkdown(markdown: string) {
-  const sections: Array<{ title: string; lines: string[] }> = [];
-  let current = { title: '设计说明', lines: [] as string[] };
-  for (const raw of markdown.split(/\r?\n/)) {
-    const heading = /^#{1,4}\s+(.+)$/.exec(raw.trim());
-    if (heading) {
-      if (current.lines.some(Boolean)) sections.push(current);
-      current = { title: heading[1] ?? '设计说明', lines: [] };
-    } else if (raw.trim() && !/^\|?\s*[-:]+/.test(raw)) current.lines.push(raw.replace(/^[-*]\s+/, ''));
-  }
-  if (current.lines.some(Boolean)) sections.push(current);
-  return sections;
 }
 function resolveTraceNode(type: string, id: string) {
   const specification = props.detail.specifications.find((item) => item.latestRevisionId === id || item.approvedRevisionId === id || item.id === id);
@@ -362,11 +357,8 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
           </section>
           <section class="design-card full-design-card">
             <header><h3>设计内容</h3></header>
-            <div v-if="featureDesignSections.length" class="design-document">
-              <article v-for="(section, index) in featureDesignSections" :key="`${section.title}-${index}`">
-                <span>{{ String(index + 1).padStart(2, '0') }}</span><div><h4>{{ section.title }}</h4><p v-for="(line, lineIndex) in section.lines" :key="lineIndex">{{ line }}</p></div>
-              </article>
-            </div>
+            <ArchiveMarkdown v-if="featureDesign?.latestRevision?.content" class="design-document" :content="featureDesign.latestRevision.content" />
+            <details v-if="featureDesign?.latestRevision?.content" class="design-source"><summary>查看原文</summary><pre>{{ featureDesign.latestRevision.content }}</pre></details>
             <p v-else class="empty-copy">暂无设计正文。</p>
           </section>
         </template>
@@ -388,7 +380,7 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
             <header><h3>{{ table.title }}</h3><span>{{ table.rows.length }} 项</span></header>
             <div class="table-scroll"><table><thead><tr><th v-for="column in table.columns" :key="column">{{ column }}</th></tr></thead><tbody><tr v-for="(row, rowIndex) in table.rows" :key="rowIndex"><td v-for="(cell, index) in row" :key="index">{{ cell }}</td></tr></tbody></table></div>
           </section>
-          <section v-if="selectedMarkdown" class="design-card narrative-card"><header><h3>设计说明</h3></header><div class="narrative"><p v-for="(line, index) in parseMarkdown(selectedMarkdown).flatMap(item => [item.title, ...item.lines])" :key="index">{{ line }}</p></div></section>
+          <section v-if="selectedMarkdown" class="design-card narrative-card"><header><h3>设计说明</h3></header><ArchiveMarkdown class="narrative" :content="selectedMarkdown" /><details class="design-source"><summary>查看原文</summary><pre>{{ selectedMarkdown }}</pre></details></section>
           <section class="design-card trace-card"><header><h3>关联</h3></header><div v-if="(blueprint?.traceLinks ?? []).filter(link => link.sourceId === selectedAsset?.id || link.targetId === selectedAsset?.id).length" class="trace-list"><div v-for="link in (blueprint?.traceLinks ?? []).filter(link => link.sourceId === selectedAsset?.id || link.targetId === selectedAsset?.id)" :key="link.id"><strong>{{ traceLeft(link) }}</strong><span>{{ relationLabel(link.relation) }}</span><strong>{{ traceRight(link) }}</strong></div></div><p v-else class="empty-copy">暂无显式追踪关系。</p></section>
         </template>
 
@@ -401,9 +393,9 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
             <div><span>设计正文</span><strong>{{ capabilityDetail?.design?.latestRevision ? '已记录' : '暂无' }}</strong></div>
             <div><span>关联工程设计</span><strong>{{ associatedAssets.length }} 项</strong></div>
             <div><span>实施任务</span><strong>{{ capabilityTasks.length }} 项</strong></div>
-            <div><span>验证结果</span><strong>{{ capabilityRuns.some(item => item.verificationSummary?.status === 'PASS') ? '已通过' : '待验证' }}</strong></div>
+            <div><span>当前 CI 核验</span><strong>{{ currentCheckCount(selectedCapability.id) }} / {{ capabilityTasks.length }} 项任务</strong></div>
           </section>
-          <section v-if="designSections.length" class="design-card capability-design"><header><h3>设计内容</h3></header><div class="section-grid"><article v-for="section in designSections" :key="section.title"><h4>{{ section.title }}</h4><p v-for="(line, index) in section.lines" :key="index">{{ line }}</p></article></div></section>
+          <section v-if="capabilityDetail?.design?.latestRevision?.content" class="design-card capability-design"><header><h3>设计内容</h3></header><ArchiveMarkdown class="design-document" :content="capabilityDetail.design.latestRevision.content" /><details class="design-source"><summary>查看原文</summary><pre>{{ capabilityDetail.design.latestRevision.content }}</pre></details></section>
           <section class="design-card"><header><h3>关联设计</h3></header><div v-if="associatedAssets.length" class="asset-link-grid"><button v-for="asset in associatedAssets" :key="asset.id" type="button" @click="selectItem('asset', asset.id)"><span>{{ assetKindLabel(asset.kind) }}</span><strong>{{ asset.name }}</strong></button></div><p v-else class="empty-copy">暂未关联工程设计。</p></section>
           <section class="design-card implementation-card"><header><h3>实现与验证</h3></header><div v-if="capabilityTasks.length" class="implementation-list"><article v-for="task in capabilityTasks" :key="task.id"><div><code>{{ task.code }}</code><strong>{{ task.name }}</strong><span :data-task-status="task.status">{{ taskStatus(task) }}</span></div><p>{{ task.objective }}</p><div v-for="run in capabilityRuns.filter(item => item.taskId === task.id)" :key="run.id" class="run-evidence"><span>执行记录 · {{ run.actorName }}</span><strong>{{ verificationLabel(run) }}</strong><code>{{ run.resultCommit ?? '尚无提交' }}</code><small>{{ run.changedFiles.map(runFileLabel).join(' · ') || '尚无文件记录' }}</small><p>{{ run.verificationSummary?.summary ?? run.summary }}</p></div></article></div><p v-else class="empty-copy">暂无实施任务。</p></section>
           <section class="design-card trace-card"><header><h3>来源与追踪</h3><span>{{ traceLinks.length }} 条关系</span></header><div v-if="traceLinks.length" class="trace-list"><div v-for="link in traceLinks" :key="link.id"><strong>{{ traceLeft(link) }}</strong><span>{{ relationLabel(link.relation) }}</span><strong>{{ traceRight(link) }}</strong></div></div><p v-else class="empty-copy">尚无显式追踪关系。</p></section>
@@ -411,7 +403,7 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
 
         <template v-else-if="selectedType === 'plan'">
           <div class="detail-heading"><div><h2>开发计划</h2></div></div>
-          <section class="design-card"><header><h3>能力项实施计划</h3><span>{{ tasks.length }} 项任务</span></header><div class="plan-table"><div class="plan-row head"><span>能力项</span><span>实施任务</span><span>领域</span><span>状态</span><span>验证</span></div><div v-for="capability in capabilities" :key="capability.id" class="plan-row"><span><code>{{ capability.code }}</code> {{ capability.name }}</span><span>{{ tasks.find(item => item.capabilityId === capability.id)?.name ?? '待规划' }}</span><span>{{ tasks.find(item => item.capabilityId === capability.id)?.area || '—' }}</span><span>{{ capabilityLabel(capability.status) }}</span><span>{{ runs.some(run => tasks.some(task => task.id === run.taskId && task.capabilityId === capability.id) && run.verificationSummary?.status === 'PASS') ? 'PASS' : '—' }}</span></div></div></section>
+          <section class="design-card"><header><h3>能力项实施计划</h3><span>{{ tasks.length }} 项任务</span></header><div class="plan-table"><div class="plan-row head"><span>能力项</span><span>实施任务</span><span>领域</span><span>状态</span><span>当前 CI 核验</span></div><div v-for="capability in capabilities" :key="capability.id" class="plan-row"><span><code>{{ capability.code }}</code> {{ capability.name }}</span><span>{{ tasks.find(item => item.capabilityId === capability.id)?.name ?? '待规划' }}</span><span>{{ tasks.find(item => item.capabilityId === capability.id)?.area || '—' }}</span><span>{{ capabilityLabel(capability.status) }}</span><span>{{ currentCheckCount(capability.id) }} / {{ tasks.filter(task => task.capabilityId === capability.id).length }}</span></div></div></section>
         </template>
 
         <template v-else>
@@ -513,12 +505,10 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
 .catalog-table strong { color: var(--ink); font-size: 14px; }
 .catalog-table p { margin: 0; color: var(--ink-secondary); font-size: 13.5px; line-height: 1.5; }
 .catalog-table span { color: var(--muted); font-size: 12px; text-align: right; }
-.design-document { display: grid; }
-.design-document article { display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 12px; padding: 18px 20px; border-bottom: 1px solid var(--line-subtle); }
-.design-document article:last-child { border-bottom: 0; }
-.design-document article > span { color: var(--muted-light); font: 700 12px var(--mono); }
-.design-document h4 { margin: 0 0 8px; color: var(--ink); font-size: 15px; }
-.design-document p { margin: 0 0 6px; color: var(--ink-secondary); font-size: 13.5px; line-height: 1.65; overflow-wrap: anywhere; }
+.design-document { min-width: 0; padding: 18px 20px; }
+.design-source { min-width: 0; border-top: 1px solid var(--line); padding: 10px 20px 16px; color: var(--muted); font-size: 12px; }
+.design-source summary { width: fit-content; cursor: pointer; color: var(--primary); }
+.design-source pre { max-height: 400px; overflow: auto; margin: 10px 0 0; padding: 12px; background: var(--surface-subtle); color: var(--ink-secondary); font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .capability-definition { display: grid; max-width: 1200px; margin: 0 auto 16px; gap: 5px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .capability-definition span { color: var(--muted); font-size: 11.5px; font-weight: 600; }
 .capability-definition strong { color: var(--ink); font-size: 15px; line-height: 1.5; }
@@ -562,12 +552,6 @@ th { background: var(--surface-subtle); color: var(--ink-secondary); font-size: 
 td { color: var(--ink-secondary); line-height: 1.5; }
 tbody tr:last-child td { border-bottom: 0; }
 .narrative { padding: 18px 20px; }
-.narrative p { margin: 0 0 8px; color: var(--ink-secondary); font-size: 14px; line-height: 1.65; }
-.section-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; }
-.section-grid article { min-height: 120px; padding: 16px 20px; border-right: 1px solid var(--surface-subtle); border-bottom: 1px solid var(--surface-subtle); }
-.section-grid article:nth-child(2n) { border-right: 0; }
-.section-grid h4 { margin: 0 0 8px; color: var(--ink); font-size: 14.5px; font-weight: 600; }
-.section-grid p { margin: 0 0 6px; color: var(--ink-secondary); font-size: 13.5px; line-height: 1.6; }
 .asset-link-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 12px; gap: 8px; }
 .asset-link-grid button { display: grid; gap: 4px; min-height: 58px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); text-align: left; transition: background 0.15s; }
 .asset-link-grid button:hover { border-color: var(--primary); background: var(--primary-subtle); transform: translateY(-1px); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04); }
@@ -635,8 +619,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .detail-heading { gap: 12px; flex-wrap: wrap; }
   .detail-heading > div:first-child { min-width: 0; }
   .fact-grid, .capability-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .section-grid, .snapshot-grid { grid-template-columns: minmax(0, 1fr); }
-  .section-grid article { border-right: 0; }
+  .snapshot-grid { grid-template-columns: minmax(0, 1fr); }
   .revision-history-list button { grid-template-columns: 64px minmax(0, 1fr) 40px; gap: 8px; }
   .revision-history-list small { grid-column: 2; grid-row: 2; }
   .revision-history-list b { grid-column: 3; grid-row: 1; }
@@ -667,7 +650,8 @@ tbody tr:last-child td { border-bottom: 0; }
   .trace-list span { text-align: left; }
   .run-snapshot-list > article > header, .run-snapshot-list > article > header > div { flex-wrap: wrap; }
   .fact-grid > div, .capability-overview-grid > div { min-height: 52px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-  .design-document article { grid-template-columns: 24px minmax(0, 1fr); gap: 8px; padding: 14px 12px; }
+  .design-document { padding: 14px 12px; }
+  .design-source { padding-inline: 12px; }
 }
 @container feature-detail (max-width: 400px) {
   .fact-grid, .capability-overview-grid { grid-template-columns: minmax(0, 1fr); }

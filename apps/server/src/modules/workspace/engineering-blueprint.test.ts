@@ -46,6 +46,21 @@ test('Engineering Blueprint adapts asset kinds, supports custom assets and keeps
   assert.equal(custom.kind, 'CUDA_KERNEL');
   const link = await rest<TraceLink>('POST', `${base}/trace-links`, { sourceType: 'CAPABILITY', sourceId: capability.id, targetType: 'ENGINEERING_ASSET', targetId: custom.id, relation: 'DEPENDS_ON' });
   assert.equal(link.relation, 'DEPENDS_ON');
+  const otherProject = await rest<Project>('POST', '/api/projects', { projectKey: 'TRACE_OTHER', name: '另一个项目' });
+  const otherModule = await rest<Module>('POST', `/api/projects/${otherProject.id}/modules`, {
+    code: 'OTHER', name: '其他模块', description: '', sortOrder: 0,
+  });
+  for (const target of [
+    { targetType: 'MODULE', targetId: otherModule.id },
+    { targetType: 'CAPABILITY', targetId: '00000000-0000-4000-8000-000000000000' },
+    { targetType: 'UNSUPPORTED', targetId: custom.id },
+  ]) {
+    const response = await app.inject({ method: 'POST', url: `${base}/trace-links`, payload: {
+      sourceType: 'CAPABILITY', sourceId: capability.id, ...target, relation: 'DEPENDS_ON',
+    } });
+    assert.equal(response.statusCode, 400, response.body);
+    assert.equal(response.json<{ error: { code: string } }>().error.code, 'TRACE_NODE_INVALID');
+  }
   const blueprint = await rest<FeatureEngineeringBlueprint>('GET', `${base}/features/${feature.id}/engineering-blueprint`);
   assert.ok(blueprint.assets.some((item) => item.kind === 'CUDA_KERNEL'));
   assert.ok(blueprint.completeness.every((item) => item.exists));
