@@ -12,6 +12,8 @@ let app: ReturnType<typeof createApp> | undefined;
 try {
   app = createApp(undefined, {
     desktopSecret, instanceId: process.env.FORGEFLOW_DESKTOP_INSTANCE, webDist: process.env.FORGEFLOW_WEB_DIST,
+    dataPath: process.env.FORGEFLOW_CURRENT_DATA_DIR, storageOverride: process.env.FORGEFLOW_STORAGE_OVERRIDE === 'true',
+    openStorage: desktopSecret && process.connected ? () => { process.send?.({ type: 'open-storage' }); } : undefined,
   });
   app.addHook('onClose', async () => { if (process.connected) process.disconnect(); });
   await app.listen({ host, port });
@@ -19,6 +21,7 @@ try {
   if (address && typeof address !== 'string') process.send?.({ type: 'ready', port: address.port, instanceId: process.env.FORGEFLOW_DESKTOP_INSTANCE });
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void app?.close(); });
   process.on('message', (message) => {
+    if (desktopSecret && message && typeof message === 'object' && 'type' in message && message.type === 'storage-committed') delete process.env.FORGEFLOW_STORAGE_PENDING;
     if (desktopSecret && message && typeof message === 'object' && 'type' in message && message.type === 'shutdown') void app?.close();
   });
 } catch (error) {

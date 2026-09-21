@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { bootstrapPath, readStorageChoice } from './desktop-storage.mjs';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 function localUrl(value, desktop = false) {
@@ -20,8 +21,15 @@ function runtime(url, source, secret, instanceId) {
 
 export async function discoverArchiveRuntime({ env = process.env, fetch: fetcher = fetch, fallbackUrl = 'http://127.0.0.1:8787' } = {}) {
   if (env.FORGEFLOW_URL !== undefined) return runtime(localUrl(env.FORGEFLOW_URL), 'explicit');
-  const dataPath = env.FORGEFLOW_DATA_DIR ? resolve(env.FORGEFLOW_DATA_DIR)
-    : env.LOCALAPPDATA ? join(env.LOCALAPPDATA, 'ForgeFlow') : null;
+  let dataPath = null; let configured = false;
+  if (env.FORGEFLOW_DATA_DIR) { dataPath = resolve(env.FORGEFLOW_DATA_DIR); configured = true; }
+  else if (env.FORGEFLOW_CONFIG_DIR || env.LOCALAPPDATA) {
+    let choice;
+    try { choice = await readStorageChoice({ env }); }
+    catch { throw new Error('桌面存储配置无法读取；未连接其他实例，队列仍保留。'); }
+    configured = Boolean(choice.dataPath);
+    dataPath = choice.dataPath ?? bootstrapPath(env);
+  }
   if (!dataPath) return runtime(localUrl(fallbackUrl), 'development');
   const descriptorPath = join(dataPath, 'runtime.json');
   let bytes;
@@ -31,7 +39,7 @@ export async function discoverArchiveRuntime({ env = process.env, fetch: fetcher
     bytes = await readFile(descriptorPath);
     if (bytes.length > 16384) throw new Error('INVALID_DESCRIPTOR_SIZE');
   } catch (error) {
-    if (error.code === 'ENOENT') return runtime(localUrl(fallbackUrl), 'development');
+    if (error.code === 'ENOENT' && !configured) return runtime(localUrl(fallbackUrl), 'development');
     throw new Error('桌面运行信息无法读取；未连接其他实例，队列仍保留。');
   }
   let descriptor;

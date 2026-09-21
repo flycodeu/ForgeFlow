@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import { discoverArchiveRuntime } from './runtime-discovery.mjs';
 import { captureStatus } from './session-capture.mjs';
 
@@ -28,9 +29,12 @@ test('explicit URL wins over malformed descriptor and does not read/send descrip
   await assert.rejects(discoverArchiveRuntime({ env: { FORGEFLOW_URL: 'https://external.test', FORGEFLOW_DATA_DIR: dir } }), /回环地址/);
 });
 
-test('absent descriptor falls back to development or validated saved queue URL', async () => {
+test('absent descriptor falls back only when no explicit desktop data directory is selected', async () => {
   const dir = await fixture(null);
-  assert.equal((await discoverArchiveRuntime({ env: { FORGEFLOW_DATA_DIR: dir } })).url, 'http://127.0.0.1:8787');
+  let requests = 0;
+  await assert.rejects(discoverArchiveRuntime({ env: { FORGEFLOW_DATA_DIR: dir }, fetch: async () => { requests++; return identityResponse(); } }), /未连接其他实例/);
+  assert.equal(requests, 0);
+  assert.equal((await discoverArchiveRuntime({ env: { FORGEFLOW_CONFIG_DIR: dir } })).url, 'http://127.0.0.1:8787');
   assert.equal((await discoverArchiveRuntime({ env: {}, fallbackUrl: 'http://127.0.0.1:9876' })).url, 'http://127.0.0.1:9876');
   await assert.rejects(discoverArchiveRuntime({ env: {}, fallbackUrl: 'https://external.test' }), /回环地址/);
 });
@@ -43,6 +47,23 @@ test('descriptor discovery authenticates identity and keeps secret out of serial
   } });
   assert.equal(calls, 1); assert.equal(found.source, 'desktop'); assert.equal(found.instanceId, instanceId);
   assert.equal(found.getHeaders()['X-ForgeFlow-Desktop'], secret); assert.equal(JSON.stringify(found).includes(secret), false);
+});
+
+test('chosen storage config redirects discovery and corrupt/missing configured data refuses fallback', async () => {
+  const config = await fixture('{old invalid descriptor}'); const data = await fixture();
+  const database = new DatabaseSync(join(data, 'forgeflow.db'));
+  database.exec('CREATE TABLE fixture (id INTEGER PRIMARY KEY)'); database.close();
+  await writeFile(join(config, 'storage.json'), JSON.stringify({ version: 1, dataPath: data }));
+  const env = { FORGEFLOW_CONFIG_DIR: config };
+  assert.equal((await discoverArchiveRuntime({ env, fetch: async () => identityResponse() })).source, 'desktop');
+  await writeFile(join(config, 'storage.json'), '{broken');
+  await assert.rejects(discoverArchiveRuntime({ env }), /存储配置/);
+  await writeFile(join(config, 'storage.json'), JSON.stringify({ version: 1, dataPath: join(data, 'disconnected') }));
+  await assert.rejects(discoverArchiveRuntime({ env }), /存储配置/);
+  const empty = await fixture(null);
+  await writeFile(join(config, 'storage.json'), JSON.stringify({ version: 1, dataPath: empty }));
+  await assert.rejects(discoverArchiveRuntime({ env }), /未连接其他实例/);
+  assert.equal((await discoverArchiveRuntime({ env: { ...env, FORGEFLOW_DATA_DIR: data }, fetch: async () => identityResponse() })).source, 'desktop');
 });
 
 test('forged remote/credential/path descriptors are rejected before credentials leave memory', async () => {

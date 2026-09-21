@@ -4,6 +4,7 @@ use std::{io::{BufRead, BufReader, Write}, path::PathBuf, process::{Child, Comma
 use tauri::{Manager, menu::{Menu, MenuItem}, tray::{TrayIconBuilder, TrayIconEvent, MouseButton}, WebviewUrl, WebviewWindowBuilder};
 
 struct Runtime(Mutex<Option<Child>>);
+mod storage;
 
 #[derive(Default)]
 struct TrustedOrigin(Option<String>);
@@ -37,6 +38,8 @@ fn show(app: &tauri::AppHandle) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+    } else {
+        storage::show(app);
     }
 }
 
@@ -57,12 +60,16 @@ fn stop(app: &tauri::AppHandle) {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
+        .plugin(tauri_plugin_dialog::init())
         .manage(Runtime(Mutex::new(None)))
+        .manage(storage::StorageState(Mutex::new(serde_json::json!({"info":null,"stage":null,"error":null,"busy":false,"ready":false}))))
+        .invoke_handler(tauri::generate_handler![storage::storage_snapshot, storage::storage_apply, storage::storage_pick, storage::storage_close])
         .setup(|app| {
             let open = MenuItem::with_id(app, "open", "打开主界面", true, None::<&str>)?;
             let status = MenuItem::with_id(app, "status", "本地服务启动中", false, None::<&str>)?;
+            let data = MenuItem::with_id(app, "storage", "数据存储位置…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "停止后台并退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &status, &quit])?;
+            let menu = Menu::with_items(app, &[&open, &data, &status, &quit])?;
             let mut pixels = vec![0u8; 32 * 32 * 4];
             for y in 0..32 { for x in 0..32 {
                 let i = (y * 32 + x) * 4;
@@ -76,6 +83,7 @@ fn main() {
                 .menu(&menu).show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show(app),
+                    "storage" => { let _ = storage::send(app, serde_json::json!({"type":"storage-info"})); storage::show(app); },
                     "quit" => { let app = app.clone(); std::thread::spawn(move || { stop(&app); app.exit(0); }); },
                     _ => {}
                 })
@@ -102,7 +110,12 @@ fn main() {
             std::thread::spawn(move || {
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                     let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+                    storage::message(&handle, &message);
                     match message["type"].as_str() {
+                        Some("setup-required") => { let _ = status.set_text("请选择数据存储位置"); storage::show(&handle); }
+                        Some("open-storage") => { let _ = storage::send(&handle, serde_json::json!({"type":"storage-info"})); storage::show(&handle); }
+                        Some("storage-progress") => { let _ = status.set_text("数据目录处理中，请勿退出"); }
+                        Some("storage-error") => { storage::show(&handle); let _ = status.set_text("存储操作未完成，请查看说明"); }
                         Some("ready") => {
                             let Some(url) = message["url"].as_str().and_then(|value| {
                                 trusted_origin.lock().ok()?.authenticated_ready(value)
@@ -116,6 +129,9 @@ fn main() {
                                     .inner_size(1180.0, 780.0).min_inner_size(640.0, 480.0)
                                     .on_navigation(move |url| navigation_origin.lock().map(|origin| origin.allows(url)).unwrap_or(false))
                                     .build();
+                                if handle.get_webview_window("main").is_some() {
+                                    if let Some(setup) = handle.get_webview_window("storage") { let _ = setup.destroy(); }
+                                }
                             }
                         }
                         Some("error") => {
@@ -134,7 +150,16 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event { api.prevent_close(); let _ = window.hide(); }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" { api.prevent_close(); let _ = window.hide(); }
+                else if window.label() == "storage" {
+                    let busy = window.state::<storage::StorageState>().0.lock().map(|state| state["busy"] == true).unwrap_or(true);
+                    if busy { api.prevent_close(); }
+                    else if window.app_handle().get_webview_window("main").is_none() {
+                        let app = window.app_handle().clone(); std::thread::spawn(move || { stop(&app); app.exit(0); });
+                    }
+                }
+            }
         })
         .build(tauri::generate_context!())
         .expect("ForgeFlow 桌面启动失败")

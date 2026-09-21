@@ -34,6 +34,7 @@ export function registerCaptureRoutes(app: FastifyInstance, auth: AuthService, w
     try { return await action(); } finally { locks.delete(id); }
   }
   async function execute(id: string, force = false) {
+    if (process.env.FORGEFLOW_STORAGE_PENDING === '1') return;
     if (!serverUrl) throw new ApiError(503, 'CAPTURE_OFFLINE', '服务未开始监听');
     const module = await bridge();
     let status = await module.captureStatus(stateDir(id));

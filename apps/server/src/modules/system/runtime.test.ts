@@ -12,7 +12,8 @@ test('desktop serves built UI, authenticates bootstrap and rejects foreign origi
   writeFileSync(join(webDist, 'index.html'), '<!doctype html><title>ForgeFlow production</title>');
   writeFileSync(join(webDist, 'assets', 'app.js'), 'console.log("built")');
   const desktopSecret = randomBytes(32).toString('base64url'); const instanceId = randomUUID();
-  const app = createApp(join(root, 'runtime.db'), { desktopSecret, instanceId, webDist });
+  let opened = 0;
+  const app = createApp(join(root, 'runtime.db'), { desktopSecret, instanceId, webDist, dataPath: root, openStorage: () => { opened++; } });
   t.after(async () => { await app.close(); rmSync(root, { recursive: true, force: true }); });
   assert.equal((await app.inject('/')).statusCode, 200);
   assert.match((await app.inject('/assets/app.js')).headers['content-type']!, /javascript/);
@@ -26,6 +27,10 @@ test('desktop serves built UI, authenticates bootstrap and rejects foreign origi
   const cookie = bootstrap.cookies.find(item => item.name === 'forgeflow_desktop'); assert.ok(cookie);
   const cookieHeader = `${cookie.name}=${cookie.value}`;
   assert.equal((await app.inject({ url: '/api/projects', headers: { cookie: cookieHeader } })).statusCode, 200);
+  assert.equal((await app.inject('/api/runtime/storage')).statusCode, 401);
+  assert.equal((await app.inject({ url: '/api/runtime/storage', headers: { cookie: cookieHeader } })).json().dataPath, root);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/runtime/storage/open', headers: { cookie: cookieHeader } })).statusCode, 200);
+  assert.equal(opened, 1);
   assert.equal((await app.inject({ method: 'POST', url: '/api/runtime/shutdown', headers: { cookie: cookieHeader } })).statusCode, 403);
   assert.equal((await app.inject({ url: '/api/runtime/identity', headers: { 'x-forgeflow-desktop': desktopSecret } })).json().instanceId, instanceId);
   for (const headers of [{ host: 'attacker.example' }, { origin: 'https://attacker.example' }, { origin: 'http://localhost:5173' }]) {
@@ -34,6 +39,8 @@ test('desktop serves built UI, authenticates bootstrap and rejects foreign origi
   const created = await app.inject({ method: 'POST', url: '/api/ai-tokens', headers: { cookie: cookieHeader }, payload: { name: 'read-only', scopes: ['project:read'] } });
   assert.equal(created.statusCode, 201, created.body);
   const authorization = `Bearer ${created.json().token}`;
+  assert.equal((await app.inject({ url: '/api/runtime/storage', headers: { authorization } })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/runtime/storage/open', headers: { authorization } })).statusCode, 401);
   assert.equal((await app.inject({ url: '/api/projects', headers: { authorization } })).statusCode, 200);
   assert.equal((await app.inject({ method: 'POST', url: '/api/projects', headers: { authorization }, payload: { projectKey: 'DENY', name: 'deny' } })).statusCode, 403);
 });

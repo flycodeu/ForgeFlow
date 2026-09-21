@@ -4,6 +4,6 @@
   "version": "0.1.0",
   "identifier": "com.flylabs.forgeflow",
   "build": { "frontendDist": "../shell" },
-  "app": { "windows": [], "security": { "capabilities": [] } },
+  "app": { "withGlobalTauri": true, "windows": [], "security": { "capabilities": [{ "identifier": "storage-local", "windows": ["storage"], "permissions": [] }], "csp": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; object-src 'none'; frame-src 'none'" } },
   "bundle": { "active": false, "icon": [] }
 }

@@ -12,6 +12,7 @@ import ResearchWorkspace from './components/ResearchWorkspace.vue';
 import SourceIntegration from './components/SourceIntegration.vue';
 import TestingWorkspace from './components/TestingWorkspace.vue';
 import ProjectArchive from './components/ProjectArchive.vue';
+import StorageSettings from './components/StorageSettings.vue';
 import ArchiveRestore from './components/ArchiveRestore.vue';
 import { api, ApiRequestError } from './api-client';
 import './app.css';
@@ -1046,6 +1047,7 @@ onMounted(async () => {
           </div>
         </div>
 
+        <StorageSettings />
         <div class="settings-grid">
           <!-- Left Column: Token Management -->
           <div class="settings-column">

@@ -49,13 +49,17 @@ CLI 队列与项目自动采集队列各自持久化；桌面后台只调度项�
 
 MCP 新增 `list_project_archive`、`get_project_document`、`archive_project_document`、`record_project_work`、`list_project_work`。读取需要 `project:read` / `spec:read`，写入需要 `spec:write`；导出另需 `task:read`。接入后由客户端主动记录，不改变其原有生成文档方式。
 
-CLI 可通过 `FORGEFLOW_URL` 显式指定本机服务地址，通过 `FORGEFLOW_TOKEN` 提供已有凭证；未指定地址时发现本机桌面服务，没有桌面描述文件时使用开发服务 8787。重试事件保留 `operationId`；AI Token 轮换后的去重续接尚未支持。
+CLI 可通过 `FORGEFLOW_URL` 显式指定本机服务地址，通过 `FORGEFLOW_TOKEN` 提供已有凭证；未指定地址时按桌面保存的数据位置发现服务。已配置桌面目录但服务不在线时会报错，不会误写开发数据库；尚未配置桌面时才使用开发服务 8787。重试事件保留 `operationId`；AI Token 轮换后的去重续接尚未支持。
 
 ## Windows 桌面版
 
-`apps/desktop/dist/ForgeFlow/ForgeFlow.exe` 为未签名便携版，必须保留旁边的运行资源文件夹。使用 WebView2，加载构建页面，不运行 Vite。关闭窗口隐藏到托盘，最小化保留在任务栏；托盘可打开窗口、查看后台状态、停止并退出。数据独立保存在 `%LOCALAPPDATA%\ForgeFlow`，通过导出/恢复迁入开发项目，不自动复制开发数据库。
+`apps/desktop/dist/ForgeFlow-Setup-0.1.0.exe` 为当前用户安装向导，可选择空的安装目录。当前不支持覆盖安装或自动升级；卸载后再安装，独立的数据目录保留。也可以使用 `apps/desktop/dist/ForgeFlow/ForgeFlow.exe` 便携版，但必须保留旁边的运行资源文件夹。两者均未签名，需要 WebView2。
 
-后台使用随机本机端口和会话认证；不会关闭其他软件端口，崩溃最多自动重启三次。当前 HTTP MCP 配置在后台换端口后需重新复制；稳定的 MCP 服务发现桥接尚未实现。托盘鼠标交互、DPI 和长时间资源占用仍需原生桌面验收；未提供签名安装包、开机启动和自动升级。构建及运行见 [桌面说明](apps/desktop/README.md)。
+首次启动选择业务数据目录，设置中显示当前位置，可打开原生目录管理窗口。迁移会暂停后台服务、复制文件、比对 SHA-256、检查 SQLite 完整性并验证新服务启动，再保存位置。失败时恢复原目录服务，原文件不删除。目标必须为空的本地专用目录，不接受系统目录、安装目录、源目录的父子目录及符号链接；失败后的目标副本保留供检查。位置配置仍保存在 `%LOCALAPPDATA%\ForgeFlow\storage.json`，WebView2 缓存不属于业务数据目录。
+
+桌面加载构建页面，不运行 Vite。关闭窗口隐藏到托盘，最小化保留在任务栏；托盘可打开窗口、管理存储、查看后台状态、停止并退出。开发项目通过导出/恢复迁入，不自动复制开发数据库。
+
+后台使用随机本机端口和会话认证；不会关闭其他软件端口，崩溃最多自动重启三次。当前 HTTP MCP 配置在后台换端口后需重新复制；稳定的 MCP 服务发现桥接尚未实现。未提供开机启动；系统 DPI、跨显示器和更长时间运行不应由短时测试推定通过。构建及运行见 [桌面说明](apps/desktop/README.md)。
 
 ## 技术栈
 

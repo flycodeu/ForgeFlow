@@ -4,7 +4,7 @@ import { resolve, relative, isAbsolute, extname } from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ApiError } from '../../shared/api-error.js';
 
-export type RuntimeOptions = { desktopSecret?: string; instanceId?: string; webDist?: string };
+export type RuntimeOptions = { desktopSecret?: string; instanceId?: string; webDist?: string; dataPath?: string; storageOverride?: boolean; openStorage?: () => void };
 const cookieName = 'forgeflow_desktop';
 const loopback = new Set(['localhost', '127.0.0.1', '[::1]']);
 function matches(actual: unknown, expected: string) {
@@ -45,7 +45,12 @@ export function registerRuntime(app: FastifyInstance, options: RuntimeOptions, a
     throw new ApiError(401, 'DESKTOP_SESSION_REQUIRED', '桌面连接已失效，请从托盘重新打开');
   });
   app.get('/api/runtime/identity', async () => ({ protocolVersion: 1, mode: desktopSecret ? 'desktop' : 'web', instanceId: instanceId ?? null }));
+  app.get('/api/runtime/storage', async () => ({ desktop: !!desktopSecret, dataPath: desktopSecret ? options.dataPath ?? null : null, canManage: !!options.openStorage, override: !!options.storageOverride }));
   if (desktopSecret) {
+    app.post('/api/runtime/storage/open', async () => {
+      if (!options.openStorage) throw new ApiError(503, 'HOST_UNAVAILABLE', '请从桌面托盘打开数据存储设置');
+      options.openStorage(); return { opened: true };
+    });
     app.post('/api/runtime/session', async (request, reply) => {
       if (!matches(request.headers['x-forgeflow-desktop'], desktopSecret)) throw new ApiError(401, 'DESKTOP_SESSION_REQUIRED', '需要本机运行凭证');
       reply.setCookie(cookieName, desktopSecret, { httpOnly: true, sameSite: 'strict', path: '/', secure: false });
