@@ -12,6 +12,7 @@ import ResearchWorkspace from './components/ResearchWorkspace.vue';
 import SourceIntegration from './components/SourceIntegration.vue';
 import TestingWorkspace from './components/TestingWorkspace.vue';
 import ProjectArchive from './components/ProjectArchive.vue';
+import ArchiveRestore from './components/ArchiveRestore.vue';
 import { api, ApiRequestError } from './api-client';
 import './app.css';
 
@@ -41,6 +42,7 @@ const featureSearch = ref('');
 const workspacePage = ref<WorkspacePage>('projects');
 const documentMode = ref<'read' | 'edit'>('read');
 const showProjectDialog = ref(false);
+const showRestoreDialog = ref(false);
 const showSpecDialog = ref(false);
 const showModuleDialog = ref(false);
 const showFeatureDialog = ref(false);
@@ -93,7 +95,8 @@ const tokens = ref<AiTokenSummary[]>([]);
 const tokenName = ref('');
 const tokenScopes = ref<AiScope[]>(scopeOptions.map((item) => item.value));
 const revealedToken = ref('');
-const mcpUrl = import.meta.env.VITE_FORGEFLOW_MCP_URL ?? 'http://127.0.0.1:8787/mcp';
+const mcpUrl = import.meta.env.VITE_FORGEFLOW_MCP_URL ?? `${import.meta.env.DEV ? 'http://127.0.0.1:8787' : window.location.origin}/mcp`;
+const isBuiltApp = !import.meta.env.DEV;
 const copiedSnippets = ref<Record<string, boolean>>({});
 
 const tokenModalTab = ref<'codex' | 'codex-toml' | 'claude' | 'desktop' | 'uninstall'>('codex');
@@ -934,28 +937,25 @@ function revokeToken(id: string) {
 function confirmDeleteProject(project: Project) {
   openConfirm({
     title: '删除项目',
-    message: `确定彻底删除项目「${project.name}」吗？\n该项目的所有模块、功能设计、文档资料和流水线记录将被永久删除，不可恢复！`,
-    confirmText: '彻底删除',
+    message: `确定删除项目「${project.name}」吗？已有工作记录的项目不能永久删除。其余项目删除后不可恢复，请先导出存档。`,
+    confirmText: '删除项目',
     isDanger: true,
     onConfirm: async () => {
-      clearMessage();
-      busy.value = true;
+      clearMessage(); busy.value = true;
       try {
         await api(`/api/projects/${project.id}`, { method: 'DELETE' });
         if (selectedProjectId.value === project.id) {
-          selectedProjectId.value = null;
-          projectDetail.value = null;
-          workspacePage.value = 'projects';
+          selectedProjectId.value = null; projectDetail.value = null; workspacePage.value = 'projects';
         }
-        await loadWorkspace();
-        notice.value = `项目「${project.name}」已删除`;
-      } catch (cause) {
-        showError(cause);
-      } finally {
-        busy.value = false;
-      }
+        await loadWorkspace(); notice.value = `项目「${project.name}」已删除`;
+      } catch (cause) { showError(cause); }
+      finally { busy.value = false; }
     },
   });
+}
+async function projectRestored(id: string) {
+  showRestoreDialog.value = false;
+  try { await loadWorkspace(); await selectProject(id); notice.value = '已恢复为新项目，原项目未改动'; } catch (cause) { showError(cause); }
 }
 
 function confirmDeleteModule(module: Module) {
@@ -1127,6 +1127,7 @@ onMounted(async () => {
                   <li><span>3</span><div><strong>执行一次命令</strong><p>以后回到这里查看连接状态和最近使用时间，不需要反复创建 Token。</p></div></li>
                 </ol>
                 <div class="endpoint-note"><small>本机 MCP 地址</small><code>{{ mcpUrl }}</code></div>
+                <p v-if="isBuiltApp" class="muted">桌面后台重启后地址可能变化，HTTP 接入需重新复制地址。文档 CLI 可自动发现本机桌面服务。</p>
                 <p class="connection-security-note">如果配置遗失，使用“重新接入”轮换凭证。旧凭证会立即失效，ForgeFlow 不会保存可恢复的明文密钥。</p>
               </div>
             </section>
@@ -1137,7 +1138,7 @@ onMounted(async () => {
 
     <template v-if="appView === 'workspace'">
       <main v-if="workspacePage === 'projects'" class="project-home">
-        <div class="project-home-heading"><h1>我的项目</h1><button class="primary-button" type="button" @click="openProjectDialog"><span>＋</span> 新建项目</button></div>
+        <div class="project-home-heading"><h1>我的项目</h1><div class="top-actions"><button class="secondary-button" type="button" @click="showRestoreDialog = true">恢复存档</button><button class="primary-button" type="button" @click="openProjectDialog"><span>＋</span> 新建项目</button></div></div>
         <section v-if="projects.length" class="project-card-grid">
           <div
             v-for="project in projects"
@@ -1338,6 +1339,7 @@ onMounted(async () => {
       </div>
     </template>
 
+    <ArchiveRestore v-if="showRestoreDialog" @close="showRestoreDialog = false" @restored="projectRestored" />
     <div v-if="showProjectDialog" class="dialog-backdrop" @click.self="showProjectDialog = false">
       <section class="dialog project-source-dialog" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title">
         <div class="dialog-heading"><div><h2 id="project-dialog-title">新建项目</h2></div><button type="button" aria-label="关闭" @click="showProjectDialog = false">×</button></div>

@@ -8,6 +8,12 @@
   },
   "scripts": {
     "archive": "node scripts/project-archive.mjs",
+    "capture": "node scripts/session-capture.mjs",
+    "desktop:prepare": "node scripts/desktop-prepare.mjs",
+    "desktop:build": "cargo build --locked --manifest-path apps/desktop/src-tauri/Cargo.toml",
+    "desktop:start": "powershell -NoProfile -File scripts/desktop-start.ps1",
+    "desktop:package": "node scripts/desktop-package.mjs",
+    "test:scripts": "node --test scripts/lib/session-capture.test.mjs scripts/lib/runtime-discovery.test.mjs scripts/desktop-service.test.mjs",
     "dev": "node scripts/free-dev-ports.mjs && node scripts/run-dev.mjs",
     "dev:server": "node scripts/free-dev-ports.mjs --server && pnpm --filter @forgeflow/server dev",
     "dev:web": "node scripts/free-dev-ports.mjs --web && pnpm --filter @forgeflow/web dev",
@@ -17,7 +23,7 @@
     "db:generate": "node scripts/generate-migration.mjs",
     "db:migrate": "pnpm --filter @forgeflow/server db:migrate",
     "seed:demo": "pnpm --filter @forgeflow/server seed:demo",
-    "test": "pnpm --filter @forgeflow/server test"
+    "test": "pnpm --filter @forgeflow/server test && pnpm test:scripts"
   },
   "devDependencies": {
     "drizzle-kit": "0.31.10",

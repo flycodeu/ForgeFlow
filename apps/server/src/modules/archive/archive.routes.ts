@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { ArchiveDocumentInput, ArchiveDocumentUpdateInput, WorkEventInput } from '@forgeflow/contracts';
+import type { ArchiveDocumentInput, ArchiveDocumentUpdateInput, WorkEventInput, ProjectArchiveRestoreInput } from '@forgeflow/contracts';
 import type { AuthService } from '../security/auth.service.js';
 import type { ArchiveService } from './archive.service.js';
 
@@ -7,6 +7,14 @@ export function registerArchiveRoutes(app: FastifyInstance, archive: ArchiveServ
   type ProjectParams = { projectId: string };
   type DocumentParams = ProjectParams & { documentId: string };
   const base = '/api/projects/:projectId/archive';
+  app.post<{ Body: { archive: unknown } }>('/api/project-archives/preview', { bodyLimit: 33_554_432 }, async (request) => {
+    await auth.require(request, 'owner', true);
+    return archive.preview(request.body?.archive);
+  });
+  app.post<{ Body: ProjectArchiveRestoreInput }>('/api/project-archives/restore', { bodyLimit: 33_554_432 }, async (request, reply) => {
+    await auth.require(request, 'owner', true);
+    return reply.code(201).send(archive.restore(request.body));
+  });
   app.get<{ Params: ProjectParams }>(`${base}/documents`, async (request) => {
     await auth.require(request, 'project:read', true);
     await auth.require(request, 'spec:read', true);

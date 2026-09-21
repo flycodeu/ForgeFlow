@@ -70,7 +70,7 @@ function canonicalConflicts(structuredData: Record<string, unknown> | null, cont
   return conflicts;
 }
 
-function normalizeLocalRoot(value: string) {
+export function normalizeLocalRoot(value: string) {
   const slashed = value.trim().replaceAll('\\', '/');
   const prefix = slashed.startsWith('//') ? '//' : slashed.startsWith('/') ? '/' : '';
   const normalized = `${prefix}${slashed.replace(/^\/+/, '').replace(/\/{2,}/g, '/')}`;
@@ -286,8 +286,9 @@ function runView(run: {
     origin: storedVerification.origin ?? 'AI_REPORTED',
     summary: storedVerification.summary ?? '',
   } satisfies RunVerificationSummary : null;
+  const { designSnapshotJson: _designJson, sourceExecutionsJson: _sourceJson, ...publicRun } = run;
   return {
-    ...run,
+    ...publicRun,
     actorType: run.actorType as RunActorType,
     status: run.status as RunStatus,
     phase: run.phase as RunPhase,
@@ -2034,7 +2035,7 @@ export class WorkspaceService {
     const project = this.repository.findProject(projectId);
     if (!project) throw new ApiError(404, 'PROJECT_NOT_FOUND', '项目不存在');
     if (this.repository.hasProjectWorkEvents(projectId)) {
-      throw new ApiError(409, 'PROJECT_HAS_WORK_RECORDS', '该项目已有保留的工作记录，当前不能永久删除；可在项目档案中导出保存');
+      throw new ApiError(409, 'PROJECT_HAS_WORK_RECORDS', '该项目已有工作记录，暂不支持永久删除；可在项目档案中导出保存');
     }
     this.repository.deleteProject(projectId);
     return { ok: true, id: projectId };

@@ -13,8 +13,10 @@ import { registerMcpRoutes } from './modules/mcp/mcp.routes.js';
 import { registerSystemRoutes } from './modules/system/system.routes.js';
 import { ArchiveService } from './modules/archive/archive.service.js';
 import { registerArchiveRoutes } from './modules/archive/archive.routes.js';
+import { registerRuntime, type RuntimeOptions } from './modules/system/runtime.js';
+import { registerCaptureRoutes } from './modules/system/capture.routes.js';
 
-export function createApp(databasePath?: string) {
+export function createApp(databasePath?: string, runtime: RuntimeOptions = {}) {
   const connection = openDatabase(databasePath);
   const { sqlite } = connection;
   const app = Fastify({ logger: true });
@@ -34,6 +36,7 @@ export function createApp(databasePath?: string) {
     } });
   });
   const auth = new AuthService(new AuthRepository(connection));
+  registerRuntime(app, runtime, (request) => auth.requireAiToken(request));
   const workspace = new WorkspaceService(new WorkspaceRepository(connection));
   const archive = new ArchiveService(connection, workspace);
   registerAuthRoutes(app, auth);
@@ -45,6 +48,7 @@ export function createApp(databasePath?: string) {
   app.addHook('onClose', async () => {
     sqlite.close();
   });
+  registerCaptureRoutes(app, auth, workspace, sqlite.name, runtime.desktopSecret);
 
   app.get<{ Reply: HealthResponse }>('/api/health', async (_request, reply) => {
     try {

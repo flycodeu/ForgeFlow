@@ -10,6 +10,8 @@ import { engineeringAssets, engineeringAssetRevisions, projects, specificationRe
 import { ApiError } from '../../shared/api-error.js';
 import type { AuthService } from '../security/auth.service.js';
 import type { WorkspaceService } from '../workspace/workspace.service.js';
+import { previewArchive, restoreArchive } from './archive-transfer.js';
+import type { ProjectArchiveRestoreInput } from '@forgeflow/contracts';
 
 type Connection = ReturnType<typeof openDatabase>;
 type Principal = Awaited<ReturnType<AuthService['require']>>;
@@ -61,6 +63,9 @@ function eventView(row: EventRow): WorkEvent {
 
 export class ArchiveService {
   constructor(private readonly connection: Connection, private readonly workspace: WorkspaceService) {}
+
+  preview(input: unknown) { return previewArchive(input); }
+  restore(input: ProjectArchiveRestoreInput) { return this.workspace.getProject(restoreArchive(this.connection, input)); }
 
   private requireProject(projectId: string) {
     if (!this.connection.db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).get()) {

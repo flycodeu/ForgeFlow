@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ForgeFlow",
+  "version": "0.1.0",
+  "identifier": "com.flylabs.forgeflow",
+  "build": { "frontendDist": "../shell" },
+  "app": { "windows": [], "security": { "capabilities": [] } },
+  "bundle": { "active": false, "icon": [] }
+}

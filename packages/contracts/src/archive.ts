@@ -57,3 +57,15 @@ export type ProjectArchiveExport = {
   specificationRevisions: SpecificationRevision[];
   events: WorkEvent[];
 };
+export type ProjectArchivePreview = {
+  digest: string;
+  sourceProject: { id: string; projectKey: string; name: string };
+  counts: Record<string, number>;
+  warnings: string[];
+};
+export type ProjectArchiveRestoreInput = {
+  archive: ProjectArchiveExport;
+  projectKey: string;
+  name: string;
+  expectedDigest: string;
+};

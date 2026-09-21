@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import type { ArchiveDocument, ArchiveDocumentDetail, ArchiveDocumentInput, EngineeringAssetRevision, ProjectArchiveExport, WorkEvent, WorkEventInput, WorkEventPage, WorkEventReceipt, WorkEventType } from '@forgeflow/contracts';
 import { api, ApiRequestError } from '../api-client';
 import ArchiveMarkdown from './ArchiveMarkdown.vue';
+import CaptureSettings from './CaptureSettings.vue';
 
 const props = defineProps<{ projectId: string; initialTab?: 'documents' | 'records' }>();
 const emit = defineEmits<{ changed: [] }>();
@@ -366,6 +367,7 @@ onBeforeUnmount(() => { projectEpoch += 1; detailRequest += 1; listRequest += 1;
     </div>
     <div v-if="error" class="archive-message error" role="alert">{{ error }}</div>
     <div v-if="notice" class="archive-message" role="status">{{ notice }}</div>
+    <CaptureSettings v-if="view === 'records'" :key="projectId" :project-id="projectId" />
     <div v-if="loading" class="archive-empty" role="status">正在读取档案…</div>
     <template v-else>
       <div v-show="view === 'documents'" id="archive-documents" role="tabpanel" aria-labelledby="archive-documents-tab">
