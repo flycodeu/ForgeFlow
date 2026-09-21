@@ -54,9 +54,9 @@ function statusName(status: Capability['status']) {
     </header>
     <section class="surface matrix-card">
       <div class="matrix-head">
-        <span>所属模块</span>
-        <span>关联功能</span>
+        <span>模块</span>
         <span>功能</span>
+        <span>能力明细</span>
         <span>设计</span>
         <span>实现</span>
         <span>验证</span>

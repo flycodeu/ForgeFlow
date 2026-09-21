@@ -24,7 +24,7 @@ async function save() {
   try {
     state.value = await api<State>(base, { method: 'PUT', body: JSON.stringify({ enabled: enabled.value, workspaceRoot: workspaceRoot.value,
       sources: [...(codex.value.trim() ? [{ kind: 'codex', directory: codex.value.trim() }] : []), ...(claude.value.trim() ? [{ kind: 'claude', directory: claude.value.trim() }] : [])], includeHistory: includeHistory.value }) });
-    notice.value = enabled.value ? '已启用，后台会按项目目录匹配会话' : '已暂停；待传记录仍保留在本机';
+    notice.value = enabled.value ? '已启用自动采集' : '已暂停自动采集';
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '保存失败'; }
   finally { busy.value = false; }
 }
@@ -45,8 +45,8 @@ function toggle(event: Event) { if ((event.target as HTMLDetailsElement).open &&
       <form @submit.prevent="save">
         <label class="capture-check"><input v-model="enabled" type="checkbox" :disabled="busy" />启用本项目的自动采集</label>
         <label>项目工作目录<input v-model="workspaceRoot" required :disabled="busy" placeholder="例如 D:\Projects\my-app" /></label>
-        <label>Codex 会话目录<input v-model="codex" :disabled="busy" placeholder="选择该客户端实际保存 JSONL 会话的目录，可留空" /></label>
-        <label>Claude Code 会话目录<input v-model="claude" :disabled="busy" placeholder="选择该客户端实际保存 JSONL 会话的目录，可留空" /></label>
+        <label>Codex 会话目录<input v-model="codex" :disabled="busy" placeholder="会话目录路径（可选）" /></label>
+        <label>Claude Code 会话目录<input v-model="claude" :disabled="busy" placeholder="会话目录路径（可选）" /></label>
         <label class="capture-check"><input v-model="includeHistory" type="checkbox" :disabled="busy || state?.configured" />首次接入时包含已有历史</label>
         <button type="submit" class="capture-save primary-button" :disabled="busy">{{ busy ? '处理中…' : '保存设置' }}</button>
       </form>

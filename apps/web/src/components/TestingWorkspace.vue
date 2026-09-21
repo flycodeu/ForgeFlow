@@ -100,17 +100,16 @@ function formatTime(iso: string) {
       <div class="kpi-card">
         <span class="kpi-label">待验收功能</span>
         <strong class="kpi-value">{{ pendingFeatures }}</strong>
-        <span class="kpi-meta">共 {{ features.length }} 项功能</span>
+        <span class="kpi-meta">{{ features.length }} 项</span>
       </div>
       <div class="kpi-card">
         <span class="kpi-label">已验收交付</span>
         <strong class="kpi-value success-stat">{{ acceptedFeatures }}</strong>
-        <span class="kpi-meta">{{ acceptedFeatures }} 项已验收</span>
       </div>
       <div class="kpi-card">
         <span class="kpi-label">未解决问题</span>
         <strong class="kpi-value" :class="{ warn: totalIssues > 0 }">{{ totalIssues }}</strong>
-        <span class="kpi-meta">{{ totalIssues ? `${totalIssues} 项待修复` : (totalVerificationRuns ? '当前记录无阻塞' : '尚未验证') }}</span>
+        <span class="kpi-meta">{{ totalIssues ? `${totalIssues} 项待修复` : (totalVerificationRuns ? '无阻塞问题' : '尚未验证') }}</span>
       </div>
     </div>
 
@@ -121,7 +120,7 @@ function formatTime(iso: string) {
         :class="{ active: activeTab === 'acceptance' }"
         @click="activeTab = 'acceptance'"
       >
-        功能验收清单 ({{ features.length }})
+        验收清单 ({{ features.length }})
       </button>
       <button
         type="button"
@@ -129,14 +128,14 @@ function formatTime(iso: string) {
         :class="{ active: activeTab === 'runs' }"
         @click="activeTab = 'runs'"
       >
-        验证执行与测试记录 ({{ runsWithVerification.length }})
+        执行与测试记录 ({{ runsWithVerification.length }})
       </button>
     </div>
 
     <!-- Tab 1: Feature Acceptance Matrix -->
     <section v-if="activeTab === 'acceptance'" class="surface matrix-card">
       <div class="qa-table-head">
-        <span>模块 / 功能</span>
+        <span>功能</span>
         <span>最新验证证据</span>
         <span>验收状态</span>
         <span>操作</span>

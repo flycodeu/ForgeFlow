@@ -344,7 +344,7 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
       <main class="engineering-detail">
         <template v-if="selectedType === 'overview'">
           <div class="detail-heading overview-heading">
-            <div><h2>{{ feature.name }}</h2><p>{{ feature.summary }}</p></div>
+            <div><h2>{{ feature.name }}</h2></div>
             <div class="feature-state"><span>当前状态</span><strong>{{ featureStatusLabel(feature.status) }}</strong></div>
           </div>
           <section class="overview-metrics">
@@ -373,7 +373,7 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
 
         <template v-else-if="selectedAsset">
           <div class="detail-heading">
-            <div><span class="detail-type">{{ assetKindLabel(selectedAsset.kind) }}</span><h2>{{ selectedAsset.name }}</h2><p>{{ selectedAsset.summary }}</p></div>
+            <div><span class="detail-type">{{ assetKindLabel(selectedAsset.kind) }}</span><h2>{{ selectedAsset.name }}</h2></div>
             <div class="asset-actions"><div class="detail-badges"><span>{{ assetStatusLabel(selectedAsset.status) }}</span><strong v-if="selectedHistoricalRevision">历史版本 · 只读</strong></div><div><button type="button" @click="showAssetHistory = !showAssetHistory">查看历史版本</button><button type="button" class="primary" @click="openRevisionDialog">创建新版本</button></div></div>
           </div>
           <section v-if="showAssetHistory" class="design-card revision-history-card">
@@ -394,7 +394,7 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
 
         <template v-else-if="selectedCapability">
           <div class="detail-heading capability-heading">
-            <div><h2>{{ selectedCapability.name }}</h2><p>{{ selectedCapability.summary }}</p></div>
+            <div><h2>{{ selectedCapability.name }}</h2></div>
             <div class="capability-state" :data-status="selectedCapability.status"><span>当前状态</span><strong>{{ capabilityLabel(selectedCapability.status) }}</strong></div>
           </div>
           <section class="capability-overview-grid">

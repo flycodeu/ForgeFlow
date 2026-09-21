@@ -1,5 +1,5 @@
-<script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+<<script setup lang="ts">
+import { computed, onMounted, ref, watch } from 'vue';
 import type {
   AiRun, AiScope, AiTokenSummary, Capability, CreatedAiToken, DesignReview, Feature, FeatureStatus, HealthResponse, Module, Project,
   ProjectDetail, ProjectSourceKind, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary,
@@ -14,6 +14,7 @@ import TestingWorkspace from './components/TestingWorkspace.vue';
 import ProjectArchive from './components/ProjectArchive.vue';
 import StorageSettings from './components/StorageSettings.vue';
 import ArchiveRestore from './components/ArchiveRestore.vue';
+import Icon from './components/Icon.vue';
 import { api, ApiRequestError } from './api-client';
 import './app.css';
 
@@ -40,6 +41,20 @@ const selectedCapabilityId = ref<string | null>(null);
 const collapsedModules = ref(new Set<string>());
 const collapsedFeatures = ref(new Set<string>());
 const featureSearch = ref('');
+const featureSearchInput = ref('');
+let searchTimer: number | null = null;
+watch(featureSearchInput, (newVal) => {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => {
+    featureSearch.value = newVal;
+  }, 120);
+});
+const featureViewMode = ref<'tree' | 'cards' | 'markdown' | 'board'>(((typeof localStorage !== 'undefined' && localStorage.getItem('forgeflow_feature_view')) as any) || 'tree');
+function setFeatureView(mode: 'tree' | 'cards' | 'markdown' | 'board') {
+  featureViewMode.value = mode;
+  try { localStorage.setItem('forgeflow_feature_view', mode); } catch {}
+}
+const markdownRawMode = ref(false);
 const workspacePage = ref<WorkspacePage>('projects');
 const documentMode = ref<'read' | 'edit'>('read');
 const showProjectDialog = ref(false);
@@ -161,23 +176,23 @@ const pageConfigs: Record<DocumentPage, { title: string; kind?: string; empty: s
   technology: { title: '技术选型', kind: 'technology', empty: '当前还没有技术选型资料。' },
   document: { title: '项目级资料', empty: '当前没有可查看的项目级资料。' },
 };
-type NavItem = { id: WorkspacePage; label: string; children?: NavItem[] };
+type NavItem = { id: WorkspacePage; label: string; icon?: string; children?: NavItem[] };
 type NavSection = { title: string; items: NavItem[] };
 
 const navSections: NavSection[] = [
   {
     title: '工作区',
     items: [
-      { id: 'overview', label: '概览' },
-      { id: 'features', label: '功能清单' },
-      { id: 'records', label: '工作记录' },
-      { id: 'archive', label: '项目档案' },
+      { id: 'overview', label: '概览', icon: 'overview' },
+      { id: 'features', label: '功能清单', icon: 'features' },
+      { id: 'records', label: '工作记录', icon: 'records' },
+      { id: 'archive', label: '项目档案', icon: 'archive' },
     ],
   },
   {
     title: '设计依据',
     items: [
-      { id: 'requirements', label: '设计资料', children: [
+      { id: 'requirements', label: '设计资料', icon: 'design', children: [
         { id: 'background', label: '项目背景' },
         { id: 'research', label: '调研与分析' },
         { id: 'requirements', label: '需求分析' },
@@ -189,7 +204,7 @@ const navSections: NavSection[] = [
   {
     title: '交付',
     items: [
-      { id: 'development', label: '变更与交付', children: [
+      { id: 'development', label: '变更与交付', icon: 'delivery', children: [
         { id: 'planning', label: '实施清单' },
         { id: 'development', label: '实现证据' },
         { id: 'testing', label: '验证与验收' },
@@ -201,7 +216,7 @@ const navSections: NavSection[] = [
   {
     title: '项目',
     items: [
-      { id: 'sources', label: '源码与项目设置' },
+      { id: 'sources', label: '源码与项目设置', icon: 'sources' },
     ],
   },
 ];
@@ -347,6 +362,103 @@ function featureVerificationLabel(featureId: string) {
   const label = verificationLabel(runs[0]);
   return label === '—' ? '无证据' : label;
 }
+
+function moduleNameById(id: string): string {
+  return projectDetail.value?.modules.find((m) => m.id === id)?.name ?? '未分组';
+}
+
+const allFilteredFeatures = computed(() => {
+  if (!projectDetail.value) return [];
+  const query = featureSearch.value.trim().toLowerCase();
+  return projectDetail.value.features.filter((f) => {
+    if (!query) return true;
+    const mod = projectDetail.value?.modules.find((m) => m.id === f.moduleId);
+    return f.name.toLowerCase().includes(query)
+      || (f.code && f.code.toLowerCase().includes(query))
+      || (mod?.name && mod.name.toLowerCase().includes(query))
+      || capabilitiesForFeature(f.id).some((c) => c.name.toLowerCase().includes(query));
+  });
+});
+
+const featureBoardColumns = [
+  { key: 'DRAFT', label: '草稿', color: 'dot-draft', statuses: ['DRAFT'] },
+  { key: 'DESIGNING', label: '设计中', color: 'dot-design', statuses: ['DESIGNING'] },
+  { key: 'READY', label: '待实施', color: 'dot-ready', statuses: ['READY'] },
+  { key: 'IMPLEMENTING', label: '实现中', color: 'dot-impl', statuses: ['IMPLEMENTING', 'VERIFYING'] },
+  { key: 'DONE', label: '已完成 / 已交付', color: 'dot-done', statuses: ['ACCEPTANCE_PENDING', 'ACCEPTED', 'DELIVERED'] },
+];
+
+function featuresForColumn(col: { statuses: string[] }) {
+  return allFilteredFeatures.value.filter((f) => col.statuses.includes(f.status));
+}
+
+function statusBadgeClass(status: string) {
+  if (['ACCEPTED', 'DELIVERED'].includes(status)) return 'pass';
+  if (['IMPLEMENTING', 'READY'].includes(status)) return 'active';
+  if (status === 'DESIGNING') return 'design';
+  return '';
+}
+
+const fullFeatureMarkdown = computed(() => {
+  if (!projectDetail.value) return '';
+  const proj = projectDetail.value.project;
+  const mods = projectDetail.value.modules;
+  const feats = projectDetail.value.features;
+  const caps = projectDetail.value.capabilities;
+
+  let md = `# ${proj.name} - 功能设计与规范全貌\n\n`;
+  md += `**统计概览**: ${mods.length} 个模块 · ${feats.length} 个功能 · ${caps.length} 项能力\n\n`;
+  md += `| 模块 | 功能 | 代码 | 状态 | 关联能力项 |\n`;
+  md += `| :--- | :--- | :--- | :--- | :--- |\n`;
+  for (const feat of feats) {
+    const mod = mods.find((m) => m.id === feat.moduleId);
+    const featCaps = caps.filter((c) => c.featureId === feat.id);
+    const capNames = featCaps.map((c) => c.name).join(', ') || '—';
+    md += `| ${mod?.name ?? '—'} | ${feat.name} | \`${feat.code || '—'}\` | ${statusName(feat.status)} | ${capNames} |\n`;
+  }
+  md += `\n---\n\n`;
+
+  for (const mod of mods) {
+    const modFeats = feats.filter((f) => f.moduleId === mod.id);
+    if (!modFeats.length) continue;
+    md += `## 模块: ${mod.name}\n\n`;
+    for (const feat of modFeats) {
+      const featCaps = caps.filter((c) => c.featureId === feat.id);
+      md += `### 功能: ${feat.name} [${statusName(feat.status)}]\n\n`;
+      if (feat.code) md += `- **标识代码**: \`${feat.code}\`\n`;
+      const spec = projectDetail.value.specifications.find((s) => s.featureId === feat.id);
+      if (spec?.title) md += `- **设计文档**: ${spec.title}\n`;
+      if (featCaps.length) {
+        md += `\n#### 能力清单 (${featCaps.length} 项)\n\n`;
+        for (const cap of featCaps) {
+          md += `- **${cap.name}** (\`${cap.code}\`) - 状态: ${capabilityStatusName(cap.status)}\n`;
+        }
+      }
+      md += `\n`;
+    }
+    md += `\n`;
+  }
+  return md;
+});
+
+function downloadFeatureMarkdown() {
+  if (!currentProject.value) return;
+  const content = fullFeatureMarkdown.value;
+  const filename = `${currentProject.value.name}-功能规范-${new Date().toISOString().slice(0, 10)}.md`;
+  const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  notice.value = '已导出功能规范 Markdown 文件';
+}
+
+async function copyFeatureMarkdown() {
+  await copySnippet('full-feature-md', fullFeatureMarkdown.value);
+  notice.value = '已复制功能规范 Markdown 到剪贴板';
+}
+
 function taskTypeName(type: TaskType) { return taskTypes.find((item) => item.value === type)?.label ?? type; }
 function taskCategoryName(category: TaskCategory) { return taskCategories.find((item) => item.value === category)?.label ?? category; }
 function taskStatusName(status: TaskStatus) { return taskStatuses.find((item) => item.value === status)?.label ?? status; }
@@ -744,11 +856,19 @@ const showCreateTokenModal = ref(false);
 const createdTokenResult = ref<CreatedAiToken | null>(null);
 const connectionDialogMode = ref<'create' | 'rotate'>('create');
 
-const codexRemoveCommand = 'codex mcp remove forgeflow';
-const claudeCodeRemoveCommand = 'claude mcp remove forgeflow';
+const codexRemoveCommand = `# 卸载 Codex MCP
+codex mcp remove forgeflow`;
+const claudeCodeRemoveCommand = `# 卸载 Claude Code MCP
+claude mcp remove forgeflow`;
 
 function createdCodexCommand(token: string) {
-  return `[Environment]::SetEnvironmentVariable("FORGEFLOW_MCP_TOKEN", "${token}", "User"); codex mcp add forgeflow --url ${mcpUrl} --bearer-token-env-var FORGEFLOW_MCP_TOKEN`;
+  return `# 1. 设置环境变量（永久生效）
+[Environment]::SetEnvironmentVariable("FORGEFLOW_MCP_TOKEN", "${token}", "User")
+
+# 2. 接入 Codex MCP
+codex mcp add forgeflow \`
+  --url "${mcpUrl}" \`
+  --bearer-token-env-var FORGEFLOW_MCP_TOKEN`;
 }
 
 function createdCodexToml(token: string) {
@@ -756,7 +876,11 @@ function createdCodexToml(token: string) {
 }
 
 function createdClaudeCodeCommand(token: string) {
-  return `claude mcp add --transport http forgeflow ${mcpUrl} --header "Authorization: Bearer ${token}"`;
+  return `# 接入 Claude Code MCP
+claude mcp add \`
+  --transport http \`
+  forgeflow "${mcpUrl}" \`
+  --header "Authorization: Bearer ${token}"`;
 }
 
 function createdClaudeDesktopJson(token: string) {
@@ -774,9 +898,9 @@ function createdClaudeDesktopJson(token: string) {
 
 function getTabTitle(tab: string): string {
   switch (tab) {
-    case 'codex': return 'Codex 命令行接入';
+    case 'codex': return 'Codex 命令行接入 (PowerShell 多行格式)';
     case 'codex-toml': return 'Codex TOML 配置';
-    case 'claude': return 'Claude Code 命令行接入';
+    case 'claude': return 'Claude Code 命令行接入 (多行参数)';
     case 'desktop': return 'Claude Desktop 配置';
     case 'uninstall': return '卸载 MCP 命令';
     default: return '';
@@ -788,7 +912,7 @@ function getModalSnippetCode(tab: string, token: string): string {
   if (tab === 'codex-toml') return createdCodexToml(token);
   if (tab === 'claude') return createdClaudeCodeCommand(token);
   if (tab === 'desktop') return createdClaudeDesktopJson(token);
-  if (tab === 'uninstall') return `# Codex\n${codexRemoveCommand}\n\n# Claude\n${claudeCodeRemoveCommand}`;
+  if (tab === 'uninstall') return `${codexRemoveCommand}\n\n${claudeCodeRemoveCommand}`;
   return '';
 }
 
@@ -1029,8 +1153,13 @@ onMounted(async () => {
   <div class="app-shell">
     <header class="topbar">
       <button class="brand" type="button" @click="showProjects"><span class="brand-mark">F</span><span class="brand-copy"><strong>ForgeFlow</strong></span></button>
-      <button v-if="appView === 'workspace' && currentProject" class="project-switcher" type="button" @click="showProjects"><span>{{ currentProject.name }}</span><b>⌄</b></button>
-      <div class="top-actions"><div class="health"><span class="health-dot" :class="{ offline: health !== '服务正常' }"></span>{{ health }}</div><button v-if="appView === 'workspace' && currentProject" class="top-link" @click="showProjects">项目</button><button v-if="appView === 'workspace'" class="top-link" @click="openTokens">设置</button><button v-if="appView === 'tokens'" class="top-link" @click="closeTokens">返回工作台</button></div>
+      <button v-if="appView === 'workspace' && currentProject" class="project-switcher" type="button" @click="showProjects"><span>{{ currentProject.name }}</span><Icon name="chevron-down" :size="12" /></button>
+      <div class="top-actions">
+        <div class="health"><span class="health-dot" :class="{ offline: health !== '服务正常' }"></span>{{ health }}</div>
+        <button v-if="appView === 'workspace' && currentProject" class="top-link" @click="showProjects"><Icon name="overview" :size="14" style="margin-right: 4px;" />项目</button>
+        <button v-if="appView === 'workspace'" class="top-link" @click="openTokens"><Icon name="settings" :size="14" style="margin-right: 4px;" />设置</button>
+        <button v-if="appView === 'tokens'" class="top-link" @click="closeTokens"><Icon name="arrow-right" :size="14" style="transform: rotate(180deg); margin-right: 4px;" />返回工作台</button>
+      </div>
     </header>
     <div v-if="error" class="message error" role="alert"><strong>操作未完成</strong><span>{{ error }}</span><button aria-label="关闭" @click="error = ''">×</button></div>
     <div v-if="notice" class="message success" role="status"><strong>已完成</strong><span>{{ notice }}</span><button aria-label="关闭" @click="notice = ''">×</button></div>
@@ -1043,7 +1172,7 @@ onMounted(async () => {
             <h1 class="page-title">系统设置</h1>
           </div>
           <div class="heading-actions">
-            <button class="secondary-button" type="button" @click="closeTokens">返回工作台</button>
+            <button class="secondary-button" type="button" @click="closeTokens"><Icon name="arrow-right" :size="14" style="transform: rotate(180deg); margin-right: 4px;" />返回工作台</button>
           </div>
         </div>
 
@@ -1059,7 +1188,7 @@ onMounted(async () => {
                 </div>
                 <div class="settings-header-actions">
                   <span class="count-label">{{ tokens.filter(item => !item.revokedAt).length }} 个可用连接</span>
-                  <button class="primary-button" type="button" @click="openCreateTokenModal">连接 AI 客户端</button>
+                  <button class="primary-button" type="button" @click="openCreateTokenModal"><Icon name="plus" :size="14" style="margin-right: 4px;" />连接 AI 客户端</button>
                 </div>
               </div>
 
@@ -1106,7 +1235,7 @@ onMounted(async () => {
               </div>
               <div v-else class="empty-state compact">
                 <h3>尚未连接 AI 客户端</h3>
-                <button class="primary-button" type="button" style="margin-top: 8px;" @click="openCreateTokenModal">连接 AI 客户端</button>
+                <button class="primary-button" type="button" style="margin-top: 8px;" @click="openCreateTokenModal"><Icon name="plus" :size="14" style="margin-right: 4px;" />连接 AI 客户端</button>
               </div>
             </section>
           </div>
@@ -1130,7 +1259,7 @@ onMounted(async () => {
 
     <template v-if="appView === 'workspace'">
       <main v-if="workspacePage === 'projects'" class="project-home">
-        <div class="project-home-heading"><h1>我的项目</h1><div class="top-actions"><button class="secondary-button" type="button" @click="showRestoreDialog = true">恢复存档</button><button class="primary-button" type="button" @click="openProjectDialog"><span>＋</span> 新建项目</button></div></div>
+        <div class="project-home-heading"><h1>我的项目</h1><div class="top-actions"><button class="secondary-button" type="button" @click="showRestoreDialog = true"><Icon name="refresh" :size="14" style="margin-right: 6px;" />恢复存档</button><button class="primary-button" type="button" @click="openProjectDialog"><Icon name="plus" :size="14" style="margin-right: 6px;" />新建项目</button></div></div>
         <section v-if="projects.length" class="project-card-grid">
           <div
             v-for="project in projects"
@@ -1152,18 +1281,17 @@ onMounted(async () => {
                 >
                   删除
                 </button>
-                <b class="card-arrow">→</b>
+                <b class="card-arrow"><Icon name="arrow-right" :size="14" /></b>
               </div>
             </div>
             <h2 class="project-card-title">{{ project.name }}</h2>
-            <p v-if="project.description" class="project-card-desc">{{ project.description }}</p>
             <dl class="project-card-meta">
               <div><dt>创建时间</dt><dd>{{ formatDate(project.createdAt) }}</dd></div>
               <div><dt>最近更新</dt><dd>{{ formatTime(projectCardMeta[project.id]?.updatedAt ?? project.createdAt) }}</dd></div>
             </dl>
           </div>
         </section>
-        <section v-else class="surface empty-state project-empty"><span>00</span><h3>还没有项目</h3><p>创建新项目，开始组织架构设计与工程任务。</p><button class="primary-button" type="button" @click="openProjectDialog"><span>＋</span> 新建项目</button></section>
+        <section v-else class="surface empty-state project-empty"><span>00</span><h3>还没有项目</h3><button class="primary-button" type="button" @click="openProjectDialog"><Icon name="plus" :size="14" style="margin-right: 6px;" />新建项目</button></section>
       </main>
 
       <div v-else-if="currentProject && projectDetail" class="console-layout">
@@ -1173,7 +1301,8 @@ onMounted(async () => {
               <div class="nav-section-title">{{ section.title }}</div>
               <div v-for="item in section.items" :key="item.id" class="nav-group">
                 <button class="nav-item" :class="{ active: navItemActive(item) }" :aria-current="navItemActive(item) ? 'page' : undefined" type="button" @click="navigate(item.id)">
-                  <span class="nav-marker"></span><span>{{ item.label }}</span><small v-if="item.id === 'features'">{{ projectDetail.features.length }}</small>
+                  <Icon v-if="item.icon" :name="item.icon" :size="15" class="nav-item-icon" />
+                  <span>{{ item.label }}</span><small v-if="item.id === 'features'">{{ projectDetail.features.length }}</small>
                 </button>
                 <div v-if="item.children && navItemActive(item)" class="nav-submenu">
                   <button v-for="child in item.children" :key="child.id" type="button" :class="{ active: workspacePage === child.id }" @click="navigate(child.id)">{{ child.label }}</button>
@@ -1192,7 +1321,6 @@ onMounted(async () => {
                   <span class="project-key-tag">{{ currentProject.projectKey }}</span>
                 </div>
                 <h1>{{ currentProject.name }}</h1>
-                <p v-if="currentProject.description">{{ currentProject.description }}</p>
               </div>
               <div class="heading-meta-actions">
                 <div class="heading-meta">
@@ -1246,7 +1374,6 @@ onMounted(async () => {
               <div class="empty-state document-empty">
                 <span class="empty-badge">DOC</span>
                 <h3>暂无{{ activeDocumentConfig.title }}资料</h3>
-                <p>{{ activeDocumentConfig.empty }}</p>
                 <button v-if="activeDocumentConfig.kind" class="primary-button" type="button" @click="prepareNewMaterial(activeDocumentPage)"><span>＋</span> 立即创建{{ activeDocumentConfig.title }}</button>
               </div>
             </section>
@@ -1261,44 +1388,230 @@ onMounted(async () => {
           </template>
 
           <template v-if="workspacePage === 'features'">
-            <div class="compact-page-heading feature-page-heading"><div class="heading-title-group"><h1>功能清单</h1><span class="heading-badge">{{ projectDetail.features.length }} 项</span></div><button class="primary-button" type="button" @click="editModule()"><span>＋</span> 新建分组</button></div>
-            <div class="feature-toolbar"><input v-model="featureSearch" type="search" aria-label="搜索功能" placeholder="搜索功能名称" /><button type="button" :disabled="!!featureSearch.trim()" @click="setTreeExpanded(true)">全部展开</button><button type="button" :disabled="!!featureSearch.trim()" @click="setTreeExpanded(false)">全部收起</button></div>
-            <section class="surface feature-tree">
-              <div class="feature-tree-head"><span>功能</span><span>状态</span><span class="tree-verification">验证</span><span></span></div>
-              <div v-for="module in visibleModules" :key="module.id" class="module-group">
-                <div class="module-row">
-                  <button class="tree-toggle" type="button" :disabled="!!featureSearch.trim()" :aria-expanded="!!featureSearch.trim() || !collapsedModules.has(module.id)" :aria-label="`${collapsedModules.has(module.id) ? '展开' : '收起'}分组 ${module.name}`" @click="toggleModule(module.id)">{{ !featureSearch.trim() && collapsedModules.has(module.id) ? '▸' : '▾' }}</button>
-                  <div class="module-identity"><strong :title="module.name">{{ module.name }}</strong><small>{{ featuresForModule(module.id).length }}</small></div>
-                  <details class="tree-menu"><summary :aria-label="`${module.name}的操作`">···</summary><div class="tree-menu-items"><button type="button" @click="editFeature(module)">新建功能</button><button type="button" @click="editModule(module)">编辑分组</button><button type="button" class="danger-link-btn" @click.stop.prevent="confirmDeleteModule(module)">删除分组</button></div></details>
+            <div class="compact-page-heading feature-page-heading">
+              <div class="heading-title-group">
+                <h1>功能结构</h1>
+                <span class="heading-badge">{{ projectDetail.features.length }} 项</span>
+              </div>
+              <div class="feature-view-switcher" role="group" aria-label="视图模式切换">
+                <button
+                  type="button"
+                  class="view-switch-btn"
+                  :class="{ active: featureViewMode === 'tree' }"
+                  title="层级列表视图"
+                  @click="setFeatureView('tree')"
+                >
+                  <Icon name="list" :size="14" />
+                  <span>层级列表</span>
+                </button>
+                <button
+                  type="button"
+                  class="view-switch-btn"
+                  :class="{ active: featureViewMode === 'cards' }"
+                  title="卡片网格视图"
+                  @click="setFeatureView('cards')"
+                >
+                  <Icon name="cards" :size="14" />
+                  <span>卡片网格</span>
+                </button>
+                <button
+                  type="button"
+                  class="view-switch-btn"
+                  :class="{ active: featureViewMode === 'board' }"
+                  title="阶段看板视图"
+                  @click="setFeatureView('board')"
+                >
+                  <Icon name="board" :size="14" />
+                  <span>阶段看板</span>
+                </button>
+                <button
+                  type="button"
+                  class="view-switch-btn"
+                  :class="{ active: featureViewMode === 'markdown' }"
+                  title="Markdown 文档视图"
+                  @click="setFeatureView('markdown')"
+                >
+                  <Icon name="file-text" :size="14" />
+                  <span>Markdown</span>
+                </button>
+              </div>
+              <button class="primary-button" type="button" @click="editModule()"><Icon name="plus" :size="14" style="margin-right: 4px;" />新建分组</button>
+            </div>
+
+            <!-- Mode 1: Tree View (Hierarchical) -->
+            <template v-if="featureViewMode === 'tree'">
+              <div class="feature-toolbar">
+                <div class="feature-search-wrap">
+                  <Icon name="search" :size="14" class="feature-search-icon" />
+                  <input v-model="featureSearchInput" type="search" aria-label="搜索功能" placeholder="搜索功能或能力名称" />
                 </div>
-                <div v-if="featureSearch.trim() || !collapsedModules.has(module.id)" class="module-features">
-                  <div v-for="feature in visibleFeatures(module)" :key="feature.id" class="feature-node">
-                    <article class="feature-row">
-                      <div class="feature-primary">
-                        <span class="tree-joint" aria-hidden="true"></span>
-                        <button v-if="capabilitiesForFeature(feature.id).length" class="tree-toggle feature-toggle" type="button" :disabled="!!featureSearch.trim()" :aria-expanded="!!featureSearch.trim() || !collapsedFeatures.has(feature.id)" :aria-label="`${collapsedFeatures.has(feature.id) ? '展开' : '收起'} ${feature.name}`" @click="toggleFeature(feature.id)">{{ !featureSearch.trim() && collapsedFeatures.has(feature.id) ? '▸' : '▾' }}</button>
-                        <span v-else class="tree-toggle-placeholder"></span>
-                        <button class="feature-open" type="button" :title="feature.name" @click="openFeature(feature)"><span class="feature-copy"><strong>{{ feature.name }}</strong></span></button>
-                      </div>
-                      <div class="feature-metric"><small>状态</small><span class="status-text" :data-status="feature.status">{{ statusName(feature.status) }}</span></div>
-                      <div class="feature-metric tree-verification" :class="{ muted: featureVerificationLabel(feature.id) === '无证据' }"><span>{{ featureVerificationLabel(feature.id) }}</span></div>
-                      <details class="tree-menu"><summary :aria-label="`${feature.name}的操作`">···</summary><div class="tree-menu-items"><button type="button" @click="editFeature(module, feature)">编辑功能</button><button type="button" class="danger-link-btn" @click.prevent="confirmDeleteFeature(feature)">删除功能</button></div></details>
-                    </article>
-                    <div v-if="capabilitiesForFeature(feature.id).length && (featureSearch.trim() || !collapsedFeatures.has(feature.id))" class="capability-list">
-                      <button v-for="capability in visibleCapabilities(module, feature)" :key="capability.id" class="capability-row" type="button" :title="capability.name" @click="openFeature(feature, capability.id)">
-                        <span class="capability-primary"><span class="capability-joint" aria-hidden="true"></span><span class="capability-copy"><strong>{{ capability.name }}</strong></span></span>
-                        <span class="feature-metric"><small>状态</small><span class="status-text" :data-status="capability.status">{{ capabilityStatusName(capability.status) }}</span></span>
-                        <span class="feature-metric tree-verification" :class="{ muted: capabilityVerificationLabel(capability.id) === '无证据' }"><span>{{ capabilityVerificationLabel(capability.id) }}</span></span>
-                        <span class="capability-enter" aria-hidden="true">→</span>
-                      </button>
-                    </div>
-                  </div>
-                  <div v-if="!featuresForModule(module.id).length" class="tree-empty">该模块还没有功能。<button type="button" @click="editFeature(module)">新建第一个功能</button></div>
+                <div class="feature-toolbar-actions">
+                  <button type="button" :disabled="!!featureSearch.trim()" @click="setTreeExpanded(true)">全部展开</button>
+                  <button type="button" :disabled="!!featureSearch.trim()" @click="setTreeExpanded(false)">全部收起</button>
                 </div>
               </div>
-              <div v-if="!projectDetail.modules.length" class="compact-empty">暂无模块<button class="primary-button" type="button" style="margin-left: 12px;" @click="editModule()">＋ 新建模块</button></div>
-              <div v-else-if="!visibleModules.length" class="compact-empty">没有匹配的功能<button type="button" @click="featureSearch = ''">清除搜索</button></div>
-            </section>
+              <section class="surface feature-tree">
+                <div class="feature-tree-head"><span>功能</span><span>状态</span><span class="tree-verification">验证</span><span></span></div>
+                <div v-for="module in visibleModules" :key="module.id" class="module-group">
+                  <div class="module-row">
+                    <button class="tree-toggle" type="button" :disabled="!!featureSearch.trim()" :aria-expanded="!!featureSearch.trim() || !collapsedModules.has(module.id)" :aria-label="`${collapsedModules.has(module.id) ? '展开' : '收起'}分组 ${module.name}`" @click="toggleModule(module.id)">{{ !featureSearch.trim() && collapsedModules.has(module.id) ? '▸' : '▾' }}</button>
+                    <div class="module-identity"><strong :title="module.name">{{ module.name }}</strong><small>{{ featuresForModule(module.id).length }}</small></div>
+                    <details class="tree-menu"><summary :aria-label="`${module.name}的操作`">···</summary><div class="tree-menu-items"><button type="button" @click="editFeature(module)">新建功能</button><button type="button" @click="editModule(module)">编辑分组</button><button type="button" class="danger-link-btn" @click.stop.prevent="confirmDeleteModule(module)">删除分组</button></div></details>
+                  </div>
+                  <div v-if="featureSearch.trim() || !collapsedModules.has(module.id)" class="module-features">
+                    <div v-for="feature in visibleFeatures(module)" :key="feature.id" class="feature-node">
+                      <article class="feature-row">
+                        <div class="feature-primary">
+                          <span class="tree-joint" aria-hidden="true"></span>
+                          <button v-if="capabilitiesForFeature(feature.id).length" class="tree-toggle feature-toggle" type="button" :disabled="!!featureSearch.trim()" :aria-expanded="!!featureSearch.trim() || !collapsedFeatures.has(feature.id)" :aria-label="`${collapsedFeatures.has(feature.id) ? '展开' : '收起'} ${feature.name}`" @click="toggleFeature(feature.id)">{{ !featureSearch.trim() && collapsedFeatures.has(feature.id) ? '▸' : '▾' }}</button>
+                          <span v-else class="tree-toggle-placeholder"></span>
+                          <button class="feature-open" type="button" :title="feature.name" @click="openFeature(feature)"><span class="feature-copy"><strong>{{ feature.name }}</strong></span></button>
+                        </div>
+                        <div class="feature-metric"><small>状态</small><span class="status-text" :data-status="feature.status">{{ statusName(feature.status) }}</span></div>
+                        <div class="feature-metric tree-verification" :class="{ muted: featureVerificationLabel(feature.id) === '无证据' }"><span>{{ featureVerificationLabel(feature.id) }}</span></div>
+                        <details class="tree-menu"><summary :aria-label="`${feature.name}的操作`">···</summary><div class="tree-menu-items"><button type="button" @click="editFeature(module, feature)">编辑功能</button><button type="button" class="danger-link-btn" @click.prevent="confirmDeleteFeature(feature)">删除功能</button></div></details>
+                      </article>
+                      <div v-if="capabilitiesForFeature(feature.id).length && (featureSearch.trim() || !collapsedFeatures.has(feature.id))" class="capability-list">
+                        <button v-for="capability in visibleCapabilities(module, feature)" :key="capability.id" class="capability-row" type="button" :title="capability.name" @click="openFeature(feature, capability.id)">
+                          <span class="capability-primary"><span class="capability-joint" aria-hidden="true"></span><span class="capability-copy"><strong>{{ capability.name }}</strong></span></span>
+                          <span class="feature-metric"><small>状态</small><span class="status-text" :data-status="capability.status">{{ capabilityStatusName(capability.status) }}</span></span>
+                          <span class="feature-metric tree-verification" :class="{ muted: capabilityVerificationLabel(capability.id) === '无证据' }"><span>{{ capabilityVerificationLabel(capability.id) }}</span></span>
+                          <span class="capability-enter" aria-hidden="true">→</span>
+                        </button>
+                      </div>
+                    </div>
+                    <div v-if="!featuresForModule(module.id).length" class="tree-empty">该模块还没有功能。<button type="button" @click="editFeature(module)">新建第一个功能</button></div>
+                  </div>
+                </div>
+                <div v-if="!projectDetail.modules.length" class="compact-empty">暂无模块<button class="primary-button" type="button" style="margin-left: 12px;" @click="editModule()"><Icon name="plus" :size="14" style="margin-right: 4px;" />新建模块</button></div>
+                <div v-else-if="!visibleModules.length" class="compact-empty">没有匹配的功能<button type="button" @click="featureSearchInput = ''">清除搜索</button></div>
+              </section>
+            </template>
+
+            <!-- Mode 2: Responsive Cards Grid -->
+            <template v-else-if="featureViewMode === 'cards'">
+              <div class="feature-toolbar">
+                <div class="feature-search-wrap">
+                  <Icon name="search" :size="14" class="feature-search-icon" />
+                  <input v-model="featureSearchInput" type="search" aria-label="搜索功能卡片" placeholder="搜索功能名称或编号" />
+                </div>
+                <div class="feature-toolbar-stats">
+                  <span>共 {{ allFilteredFeatures.length }} 项功能</span>
+                </div>
+              </div>
+              <div class="feature-cards-grid">
+                <div
+                  v-for="feature in allFilteredFeatures"
+                  :key="feature.id"
+                  class="feature-view-card surface"
+                  role="button"
+                  tabindex="0"
+                  @click="openFeature(feature)"
+                  @keydown.enter.self="openFeature(feature)"
+                >
+                  <div class="feature-card-header">
+                    <span class="feature-module-badge">{{ moduleNameById(feature.moduleId) }}</span>
+                    <span class="status-badge" :class="statusBadgeClass(feature.status)">{{ statusName(feature.status) }}</span>
+                  </div>
+                  <h3 class="feature-card-name">{{ feature.name }}</h3>
+                  <div class="feature-card-stats">
+                    <span class="stat-pill">{{ capabilitiesForFeature(feature.id).length }} 项能力</span>
+                    <span class="stat-pill">{{ tasksForFeature(feature.id).length }} 个任务</span>
+                    <span class="stat-pill verification" :class="{ empty: featureVerificationLabel(feature.id) === '无证据' }">{{ featureVerificationLabel(feature.id) }}</span>
+                  </div>
+                  <div class="feature-card-footer">
+                    <code class="feature-code">#{{ feature.code }}</code>
+                    <span class="card-enter-btn">进入工作台 <Icon name="arrow-right" :size="13" /></span>
+                  </div>
+                </div>
+                <div v-if="!allFilteredFeatures.length" class="compact-empty" style="grid-column: 1 / -1;">
+                  没有匹配的功能卡片
+                </div>
+              </div>
+            </template>
+
+            <!-- Mode 3: Stage Kanban Board -->
+            <template v-else-if="featureViewMode === 'board'">
+              <div class="feature-board-grid">
+                <div
+                  v-for="col in featureBoardColumns"
+                  :key="col.key"
+                  class="board-column surface"
+                >
+                  <div class="board-column-header">
+                    <div class="board-column-title">
+                      <span class="board-status-dot" :class="col.color"></span>
+                      <strong>{{ col.label }}</strong>
+                    </div>
+                    <span class="board-column-count">{{ featuresForColumn(col).length }}</span>
+                  </div>
+                  <div class="board-column-body">
+                    <div
+                      v-for="feature in featuresForColumn(col)"
+                      :key="feature.id"
+                      class="board-card"
+                      role="button"
+                      tabindex="0"
+                      @click="openFeature(feature)"
+                      @keydown.enter.self="openFeature(feature)"
+                    >
+                      <div class="board-card-module">{{ moduleNameById(feature.moduleId) }}</div>
+                      <div class="board-card-title">{{ feature.name }}</div>
+                      <div class="board-card-meta">
+                        <span>{{ capabilitiesForFeature(feature.id).length }} 能力</span>
+                        <span class="board-verification" :class="{ empty: featureVerificationLabel(feature.id) === '无证据' }">{{ featureVerificationLabel(feature.id) }}</span>
+                      </div>
+                    </div>
+                    <div v-if="!featuresForColumn(col).length" class="board-column-empty">
+                      暂无功能
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <!-- Mode 4: Markdown Document Specification -->
+            <template v-else-if="featureViewMode === 'markdown'">
+              <div class="feature-markdown-view surface">
+                <div class="markdown-view-toolbar">
+                  <div class="toolbar-left">
+                    <Icon name="file-text" :size="16" />
+                    <strong>功能规格说明书 (Markdown)</strong>
+                    <span class="toolbar-meta">实时聚合 {{ projectDetail.modules.length }} 个分组 · {{ projectDetail.features.length }} 项功能</span>
+                  </div>
+                  <div class="toolbar-actions">
+                    <button
+                      type="button"
+                      class="secondary-button"
+                      style="font-size: 12px; padding: 4px 10px;"
+                      @click="markdownRawMode = !markdownRawMode"
+                    >
+                      {{ markdownRawMode ? '预览效果' : '查看源码' }}
+                    </button>
+                    <button
+                      type="button"
+                      class="secondary-button"
+                      style="font-size: 12px; padding: 4px 10px;"
+                      @click="copyFeatureMarkdown"
+                    >
+                      <Icon :name="copiedSnippets['features-md'] ? 'check' : 'copy'" :size="14" style="margin-right: 4px;" />
+                      <span>{{ copiedSnippets['features-md'] ? '已复制' : '复制 Markdown' }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="secondary-button"
+                      style="font-size: 12px; padding: 4px 10px;"
+                      @click="downloadFeatureMarkdown"
+                    >
+                      <Icon name="download" :size="14" style="margin-right: 4px;" />
+                      <span>导出 .md 文件</span>
+                    </button>
+                  </div>
+                </div>
+                <div v-if="!markdownRawMode" class="markdown-body feature-markdown-content" v-html="renderMarkdown(fullFeatureMarkdown)"></div>
+                <pre v-else class="markdown-raw-code"><code>{{ fullFeatureMarkdown }}</code></pre>
+              </div>
+            </template>
           </template>
 
           <template v-if="workspacePage === 'feature-detail' && selectedFeature">
