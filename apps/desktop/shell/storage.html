@@ -1,16 +1,15 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ForgeFlow · 数据存储</title><link rel="stylesheet" href="storage.css"><script src="storage.js" defer></script></head>
 <body><main>
-<header><span class="brand">F</span><span>ForgeFlow <small>本机存储</small></span></header>
+<header><span class="brand">F</span><span>ForgeFlow</span></header>
 <h1 id="heading">数据存储位置</h1><p id="intro">正在读取本机配置…</p>
 <section id="current-section" hidden><span class="label">当前位置</span><p id="current" class="path"></p></section>
 <form id="storage-form">
 <label for="target">数据目录</label><div class="path-input"><input id="target" required autocomplete="off" spellcheck="false" placeholder="例如 D:\ForgeFlowData"><button id="browse" type="button">浏览…</button></div>
 <div id="legacy-section" hidden><p>发现旧版数据：<span id="legacy" class="path"></span></p><button id="use-legacy" type="button">使用原目录</button><label class="check"><input id="reuse" type="checkbox">我确认继续使用这份旧版数据</label></div>
-<p class="hint">选择专用空目录。项目、文档与采集队列放在一起，源码文件仍留在原处。</p>
 <label class="check" id="migration-ack" hidden><input id="ack" type="checkbox">我已保存正在编辑的内容；同意暂停后台、复制并校验，成功后切换目录</label>
 <p class="hint" id="retention" hidden>原目录保留。失败会尝试回到原目录；迁移期间请勿退出。成功后的旧副本不会继续同步。</p>
 <p id="status" role="status" aria-live="polite"></p><p id="error" role="alert"></p>
 <footer><button id="close" type="button">关闭</button><button id="submit" class="primary" type="submit">使用此目录</button></footer>
-</form><details><summary>配置文件位置</summary><p id="config" class="path"></p><p class="hint">卸载程序不删除项目数据。不要手动移动正在使用的数据库文件。</p></details>
+</form><details><summary>配置文件位置</summary><p id="config" class="path"></p></details>
 </main></body></html>

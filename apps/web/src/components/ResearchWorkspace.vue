@@ -100,7 +100,6 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
     </div>
     <div v-else class="surface empty-state">
       <h3>尚无调研对象</h3>
-      <p>记录参考项目、开源组件或竞品调研结果，为架构和技术决策提供依据。</p>
       <button class="primary-button" type="button" @click="emit('create')">＋ 新建调研</button>
     </div>
   </div>
@@ -116,7 +115,7 @@ watch(items, (value) => { if (!value.some((item) => item.name === selectedName.v
   grid-template-columns: 240px minmax(0, 1fr);
   min-height: 360px;
   overflow: hidden;
-  border-radius: 12px;
+  border-radius: 6px;
 }
 .research-layout aside {
   border-right: 1px solid var(--line);

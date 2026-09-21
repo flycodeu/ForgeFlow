@@ -13,5 +13,5 @@ async function open() { busy.value = true; error.value = ''; try { await api('/a
   </section>
 </template>
 <style scoped>
-.storage-card{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding:22px;margin-bottom:24px}.storage-card h2{font-size:17px;margin:0 0 10px}.storage-card p{font-size:13px;color:var(--text-secondary,#69766b);margin:8px 0}.storage-card code{display:block;overflow-wrap:anywhere;font-size:13px;color:var(--text-primary,#293e32)}.storage-card>div{min-width:0}.storage-card button{flex-shrink:0}@media(max-width:700px){.storage-card{flex-direction:column;padding:16px}}
+.storage-card{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding:22px;margin-bottom:24px}.storage-card h2{font-size:17px;margin:0 0 10px;color:var(--ink);}.storage-card p{font-size:13px;color:var(--muted);margin:8px 0}.storage-card code{display:block;overflow-wrap:anywhere;font-size:13px;color:var(--ink);background:var(--surface-subtle);padding:6px 10px;border-radius:4px;border:1px solid var(--line);}.storage-card>div{min-width:0}.storage-card button{flex-shrink:0}@media(max-width:700px){.storage-card{flex-direction:column;padding:16px}}
 </style>

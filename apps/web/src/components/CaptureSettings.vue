@@ -48,14 +48,29 @@ function toggle(event: Event) { if ((event.target as HTMLDetailsElement).open &&
         <label>Codex 会话目录<input v-model="codex" :disabled="busy" placeholder="选择该客户端实际保存 JSONL 会话的目录，可留空" /></label>
         <label>Claude Code 会话目录<input v-model="claude" :disabled="busy" placeholder="选择该客户端实际保存 JSONL 会话的目录，可留空" /></label>
         <label class="capture-check"><input v-model="includeHistory" type="checkbox" :disabled="busy || state?.configured" />首次接入时包含已有历史</label>
-        <p class="capture-scope">解析所选会话目录，仅保存工作路径匹配本项目的可见消息及工具摘要。不保存隐藏推理或其他项目消息；敏感文字仅作尽力脱敏。其他客户端和云端会话尚未接入。</p>
-        <button type="submit" class="capture-save" :disabled="busy">{{ busy ? '处理中…' : '保存设置' }}</button>
+        <button type="submit" class="capture-save primary-button" :disabled="busy">{{ busy ? '处理中…' : '保存设置' }}</button>
       </form>
       <ul v-if="state?.diagnostics?.length"><li v-for="item in state.diagnostics.slice(0, 8)" :key="item.name">{{ item.message }}</li></ul>
     </div>
   </details>
 </template>
 <style scoped>
-.capture-settings { border-bottom: 1px solid var(--border, #dcded6); margin-bottom: 16px; }.capture-settings summary { cursor: pointer; padding: 14px 0; font-weight: 600; }.capture-settings summary span { float: right; color: #66776b; font-size: 12px; font-weight: 400; }
-.capture-body { padding-bottom: 18px; }.capture-status { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-bottom: 12px; font-size: 13px; }.capture-body form { display: grid; gap: 12px; max-width: 720px; }.capture-body label { display: grid; gap: 6px; font-size: 13px; }.capture-body input:not([type=checkbox]) { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid #d5d9d0; border-radius: 5px; background: #fbfaf7; color: #263c32; }.capture-body .capture-check { display: flex; align-items: center; gap: 8px; }.capture-check input { width: auto; accent-color: #2f6b59; }.capture-body p { font-size: 12px; color: #64736b; line-height: 1.7; margin: 0; }.capture-body .capture-error { color: #a33b32; margin-bottom: 12px; }.capture-body button { padding: 7px 12px; border-radius: 5px; border: 1px solid #d5d9d0; background: #fbfaf7; cursor: pointer; }.capture-body .capture-save { justify-self: start; background: #2f6b59; color: white; border-color: #2f6b59; }.capture-body button:disabled { opacity: .5; cursor: not-allowed; }.capture-body ul { font-size: 12px; color: #94643d; }
+.capture-settings { border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.capture-settings summary { cursor: pointer; padding: 14px 0; font-weight: 600; color: var(--ink); }
+.capture-settings summary span { float: right; color: var(--muted); font-size: 12px; font-weight: 400; }
+.capture-body { padding-bottom: 18px; }
+.capture-status { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-bottom: 12px; font-size: 13px; color: var(--muted); }
+.capture-body form { display: grid; gap: 12px; max-width: 720px; }
+.capture-body label { display: grid; gap: 6px; font-size: 13px; color: var(--ink); font-weight: 500; }
+.capture-body input:not([type=checkbox]) { width: 100%; min-width: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.capture-body .capture-check { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+.capture-check input { width: auto; accent-color: var(--primary); }
+.capture-body p { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 0; }
+.capture-body .capture-error { color: var(--danger, #dc2626); margin-bottom: 12px; }
+.capture-body button { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-secondary); font-size: 13px; cursor: pointer; transition: all 0.15s; }
+.capture-body button:hover { background: var(--surface-subtle); }
+.capture-body .capture-save { justify-self: start; background: var(--primary); color: #fff; border-color: var(--primary); font-weight: 600; }
+.capture-body .capture-save:hover { background: var(--primary-hover); }
+.capture-body button:disabled { opacity: .5; cursor: not-allowed; }
+.capture-body ul { font-size: 12px; color: var(--muted); padding-left: 18px; }
 </style>

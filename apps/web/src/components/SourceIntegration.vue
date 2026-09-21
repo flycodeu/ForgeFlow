@@ -28,7 +28,6 @@ const busy = ref(false);
 const pickingFolder = ref(false);
 const showSourceDialog = ref(false);
 const showAnalysisDialog = ref(false);
-const showHelp = ref(false);
 const expandedSourceId = ref<string | null>(null);
 const sourceDraft = ref<SourceDraft>(emptySource());
 const analysisEnvironment = ref('');
@@ -178,17 +177,10 @@ function formatSnapshot(snapshot: unknown) { return JSON.stringify(snapshot, nul
         <span class="heading-badge">共 {{ sources.length }} 项源码</span>
       </div>
       <div class="source-actions">
-        <button class="help-button" type="button" @click="showHelp = !showHelp">ⓘ 帮助</button>
         <button class="secondary-button" type="button" @click="addSource">＋ 添加源码</button>
         <button class="primary-button" type="button" :disabled="!sources.length" @click="openAnalysis()">请求 AI 分析</button>
       </div>
     </header>
-
-    <aside v-if="showHelp" class="source-help">
-      <button type="button" aria-label="关闭帮助" @click="showHelp = false">×</button>
-      <strong>源码位置说明</strong>
-      <p>登记本地代码仓库或模块路径，外部 AI 工具通过 MCP 服务读取上下文以开展研发。</p>
-    </aside>
 
     <div v-if="sources.length" class="source-table">
       <div class="source-table-head"><span>源码</span><span>位置</span><span>类型</span><span>状态</span><span>最近分析</span><span></span></div>
@@ -256,7 +248,6 @@ function formatSnapshot(snapshot: unknown) { return JSON.stringify(snapshot, nul
                 {{ pickingFolder ? '选择中…' : '选择文件夹' }}
               </button>
             </div>
-            <small>支持粘贴中文和空格路径，也可直接点击按钮选择系统文件夹。</small>
           </label>
           <div class="field-pair"><label>Git Remote（可选）<input v-model="sourceDraft.remoteUrl" maxlength="2048" placeholder="https://..." /></label><label>仓库子目录（可选）<input v-model="sourceDraft.repoSubdir" maxlength="500" placeholder="apps/backend" /></label></div>
           <details class="scope-editor"><summary>分析范围</summary><div class="field-pair"><label>包含（每行一项）<textarea v-model="sourceDraft.includeText" spellcheck="false"></textarea></label><label>排除（每行一项）<textarea v-model="sourceDraft.excludeText" spellcheck="false"></textarea></label></div></details>
@@ -272,7 +263,6 @@ function formatSnapshot(snapshot: unknown) { return JSON.stringify(snapshot, nul
           <label>目标环境<select v-model="analysisEnvironment" required><option v-for="key in environmentKeys" :key="key" :value="key">{{ key }}</option></select></label>
           <fieldset><legend>选择源码</legend><label v-for="source in sources" :key="source.id" class="source-check"><input v-model="analysisSourceIds" type="checkbox" :value="source.id" /><span><code>{{ source.alias }}</code>{{ source.displayName }}</span></label></fieldset>
           <label>分析范围<textarea v-model="analysisDescription" maxlength="1000" required></textarea></label>
-          <small class="dialog-hint">创建分析请求后，外部 AI 工具将读取该源码并同步分析结果。</small>
           <footer><button class="secondary-button" type="button" @click="showAnalysisDialog = false">取消</button><button class="primary-button" type="submit" :disabled="busy || !analysisSourceIds.length">创建请求</button></footer>
         </form>
       </section>
@@ -286,13 +276,13 @@ function formatSnapshot(snapshot: unknown) { return JSON.stringify(snapshot, nul
           <button type="button" aria-label="关闭" @click="sourceToDelete = null">×</button>
         </header>
         <div style="padding: 20px 22px;">
-          <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #334155;">
+          <p style="margin: 0; font-size: 14px; line-height: 1.6; color: var(--ink-secondary);">
             确定要移除源码「<strong>{{ sourceToDelete.displayName }}</strong>」吗？此操作将清理该源码的登记与关联分析记录。
           </p>
         </div>
         <footer style="display: flex; justify-content: flex-end; gap: 10px; padding: 12px 22px 20px; border-top: 1px solid var(--line);">
           <button class="secondary-button" type="button" :disabled="busy" @click="sourceToDelete = null">取消</button>
-          <button class="primary-button" style="background: #dc2626; border-color: #dc2626; color: #fff;" type="button" :disabled="busy" @click="executeDeleteSource">确认移除</button>
+          <button class="primary-button danger-submit-btn" type="button" :disabled="busy" @click="executeDeleteSource">确认移除</button>
         </footer>
       </section>
     </div>

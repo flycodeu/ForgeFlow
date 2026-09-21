@@ -1,60 +1,60 @@
 :root {
-  font-family: "Aptos", "Segoe UI Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --mono: "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  --canvas: #f4f2ec;
-  --surface: #fbfaf7;
-  --surface-subtle: #eeece5;
-  --surface-hover: #ebe9e1;
+  --canvas: #f8fafc;
+  --surface: #ffffff;
+  --surface-subtle: #f1f5f9;
+  --surface-hover: #f8fafc;
 
-  --line: #d8d6cf;
-  --line-strong: #bcbab1;
-  --line-subtle: #e8e5de;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+  --line-subtle: #f1f5f9;
 
-  --ink: #1f2623;
-  --ink-secondary: #3f4b46;
-  --muted: #67716d;
-  --muted-light: #8e9692;
+  --ink: #0f172a;
+  --ink-secondary: #334155;
+  --muted: #64748b;
+  --muted-light: #94a3b8;
 
-  --primary: #2f6b59;
-  --primary-hover: #245746;
-  --primary-active: #1e473a;
-  --primary-subtle: #e7efe9;
-  --primary-border: #b8cfc4;
+  --primary: #0f766e;
+  --primary-hover: #115e59;
+  --primary-active: #134e4a;
+  --primary-subtle: #f0fdfa;
+  --primary-border: #ccfbf1;
   --primary-ink: #ffffff;
 
-  --accent: #a76516;
-  --accent-hover: #87500f;
-  --accent-subtle: #f5ead9;
+  --accent: #0f766e;
+  --accent-hover: #115e59;
+  --accent-subtle: #f0fdfa;
 
   /* Status Colors (Soft, Muted Big Tech Badges) */
   --success: #16a34a;
   --success-bg: #f0fdf4;
-  --success-border: #bbf7d0;
-  --success-ink: #166534;
+  --success-border: #dcfce7;
+  --success-ink: #15803d;
 
   --warning: #d97706;
   --warning-bg: #fffbeb;
-  --warning-border: #fde68a;
-  --warning-ink: #92400e;
+  --warning-border: #fef3c7;
+  --warning-ink: #b45309;
 
   --danger: #dc2626;
   --danger-bg: #fef2f2;
-  --danger-border: #fecaca;
-  --danger-ink: #991b1b;
+  --danger-border: #fee2e2;
+  --danger-ink: #b91c1c;
 
-  --info: var(--primary);
-  --info-bg: var(--primary-subtle);
-  --info-border: var(--primary-border);
-  --info-ink: var(--primary-hover);
+  --info: #0284c7;
+  --info-bg: #f0f9ff;
+  --info-border: #e0f2fe;
+  --info-ink: #0369a1;
 
-  --topbar-bg: #fbfaf7;
-  --topbar-border: #d8d6cf;
-  --sidebar-bg: #eeece5;
-  --sidebar-surface: #fbfaf7;
-  --sidebar-border: #d8d6cf;
-  --sidebar-ink: #1f2623;
-  --sidebar-muted: #67716d;
+  --topbar-bg: #ffffff;
+  --topbar-border: #e2e8f0;
+  --sidebar-bg: #f8fafc;
+  --sidebar-surface: #ffffff;
+  --sidebar-border: #e2e8f0;
+  --sidebar-ink: #0f172a;
+  --sidebar-muted: #64748b;
 
   /* Radii */
   --radius-xs: 4px;
@@ -65,15 +65,15 @@
   --radius-full: 9999px;
 
   /* Shadows */
-  --shadow-xs: none;
-  --shadow-sm: 0 1px 2px rgba(31, 38, 35, 0.05);
-  --shadow-md: 0 8px 20px rgba(31, 38, 35, 0.08);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
-  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.06);
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.07), 0 2px 4px -2px rgba(15, 23, 42, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.04);
+  --shadow-xl: 0 20px 25px -5px rgba(15, 23, 42, 0.1), 0 8px 10px -6px rgba(15, 23, 42, 0.06);
 
   /* Dimensions */
   --topbar-height: 54px;
-  --sidebar-width: 208px;
+  --sidebar-width: 216px;
   --control-height: 36px;
 }
 
@@ -127,11 +127,11 @@ code, pre { font-family: var(--mono); }
   place-items: center;
   width: 28px;
   height: 28px;
-  background: #2f6b59;
+  background: var(--primary);
   color: var(--primary-ink);
   font-weight: 800;
   font-size: 14px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
 }
 .brand-copy { display: flex; align-items: baseline; gap: 8px; }
@@ -425,10 +425,10 @@ code, pre { font-family: var(--mono); }
   color: var(--primary-ink);
   font-size: 13.5px;
   font-weight: 600;
-  box-shadow: 0 1px 2px rgba(47, 107, 89, 0.18);
+  box-shadow: var(--shadow-xs);
   transition: all 0.15s ease;
 }
-.primary-button:hover { background: var(--primary-hover); box-shadow: 0 2px 8px rgba(47, 107, 89, 0.24); }
+.primary-button:hover { background: var(--primary-hover); box-shadow: var(--shadow-sm); }
 .primary-button:active { background: var(--primary-active); }
 
 .secondary-button {
@@ -702,17 +702,47 @@ code, pre { font-family: var(--mono); }
 .compact-empty { padding: 36px 20px; text-align: center; color: var(--muted); font-size: 13.5px; }
 
 .task-status, .feature-status, .run-status {
-  padding: 3px 8px;
-  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
   font-size: 11.5px;
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
+  border: 1px solid transparent;
 }
-.task-status[data-status="PLANNED"], .feature-status[data-status="DRAFT"] { background: var(--surface-subtle); color: var(--ink-secondary); }
-.task-status[data-status="RUNNING"], .run-status[data-status="RUNNING"] { background: #e0f2fe; color: var(--primary-hover); }
-.task-status[data-status="SUBMITTED"] { background: #fef3c7; color: #92400e; }
-.task-status[data-status="CONFIRMED"], .feature-status[data-status="ACCEPTED"], .feature-status[data-status="DELIVERED"] { background: #dcfce7; color: #15803d; }
-.review-badge.pending { background: #fef3c7; color: #b45309; padding: 3px 8px; border-radius: var(--radius-full); font-size: 11.5px; font-weight: 600; }
+.task-status[data-status="PLANNED"], .feature-status[data-status="DRAFT"] {
+  background: var(--surface-subtle);
+  border-color: var(--line);
+  color: var(--muted);
+}
+.task-status[data-status="RUNNING"], .run-status[data-status="RUNNING"] {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #15803d;
+}
+.task-status[data-status="SUBMITTED"] {
+  background: #fffbeb;
+  border-color: #fef3c7;
+  color: #b45309;
+}
+.task-status[data-status="CONFIRMED"], .feature-status[data-status="ACCEPTED"], .feature-status[data-status="DELIVERED"] {
+  background: #f0fdf4;
+  border-color: #dcfce7;
+  color: #15803d;
+}
+.review-badge.pending {
+  display: inline-flex;
+  align-items: center;
+  background: #fffbeb;
+  border: 1px solid #fef3c7;
+  color: #b45309;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 500;
+}
 
 .activity-mark {
   padding: 2px 7px;

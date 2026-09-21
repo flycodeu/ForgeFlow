@@ -39,7 +39,6 @@ async function restore() {
   <div class="dialog-backdrop" @click.self="!busy && emit('close')">
     <section class="dialog restore-dialog" role="dialog" aria-modal="true" aria-labelledby="restore-heading" @keydown.esc="!busy && emit('close')">
       <div class="dialog-heading"><h2 id="restore-heading">恢复项目存档</h2><button type="button" aria-label="关闭" :disabled="busy" @click="emit('close')">×</button></div>
-      <p>恢复为新项目，保留历史，不覆盖现有项目。不会恢复源码文件或系统凭证。</p>
       <label class="file-label">选择 ForgeFlow JSON 存档<input type="file" accept=".json,application/json" :disabled="busy" @change="inspect" /></label>
       <p v-if="error" role="alert" class="restore-error">{{ error }}</p>
       <p v-if="busy" role="status">正在处理，请勿关闭…</p>
@@ -56,8 +55,8 @@ async function restore() {
 </template>
 <style scoped>
 .restore-dialog { max-height: 85vh; overflow-y: auto; width: min(600px, calc(100vw - 32px)); }
-.restore-dialog p { color: var(--text-secondary, #64736b); line-height: 1.6; }
-.file-label { display: grid; gap: 10px; margin: 20px 0; }
+.restore-dialog p { color: var(--muted); line-height: 1.6; }
+.file-label { display: grid; gap: 10px; margin: 20px 0; color: var(--ink); font-weight: 500; }
 .restore-counts { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 12px 0; }
 .restore-counts div { display: flex; gap: 8px; }.restore-counts dt { color: var(--text-secondary, #64736b); }.restore-counts dd { margin: 0; font-weight: 600; }
 .restore-error { color: #a33b32 !important; }.restore-dialog ul { padding-left: 20px; font-size: 13px; }
