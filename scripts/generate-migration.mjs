@@ -21,4 +21,41 @@ const result = spawnSync(process.execPath, [resolve(dirname(packagePath), binPat
 });
 
 if (result.error) throw result.error;
+
+if ((result.status ?? 1) === 0) {
+  const migrationsDir = fileURLToPath(new URL('../migrations', import.meta.url));
+  const journalPath = resolve(migrationsDir, 'meta/_journal.json');
+  try {
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
+    let modified = false;
+    for (const entry of journal.entries) {
+      const match = /^(\d{4})_(.+)$/.exec(entry.tag);
+      if (match) {
+        const [, , cleanTag] = match;
+        const oldSqlPath = resolve(migrationsDir, `${entry.tag}.sql`);
+        const newSqlPath = resolve(migrationsDir, `${cleanTag}.sql`);
+        const fs = await import('node:fs');
+        if (fs.existsSync(oldSqlPath)) {
+          fs.renameSync(oldSqlPath, newSqlPath);
+        }
+        const oldSnapshot = resolve(migrationsDir, `meta/${match[1]}_snapshot.json`);
+        const newSnapshot = resolve(migrationsDir, `meta/${cleanTag}_snapshot.json`);
+        if (fs.existsSync(oldSnapshot)) {
+          fs.renameSync(oldSnapshot, newSnapshot);
+        }
+        entry.tag = cleanTag;
+        modified = true;
+      }
+    }
+    if (modified) {
+      const fs = await import('node:fs');
+      fs.writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`, 'utf8');
+      console.log(`[db:generate] Normalized migration to semantic non-numbered format: ${name}.sql`);
+    }
+  } catch (error) {
+    console.warn('[db:generate] Warning: Failed to normalize migration filename:', error);
+  }
+}
+
 process.exitCode = result.status ?? 1;
+

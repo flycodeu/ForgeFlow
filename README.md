@@ -94,10 +94,17 @@ pnpm dev
 `migrations/schema.sql` 是数据库基线，后续命名迁移按账本顺序应用；不要修改已经应用的迁移。
 
 ```text
-migrations/
+apps/server/src/db/sql/             # 领域独立模块化 SQL (高内聚、低耦合)
+├─ auth.sql                         # 认证与安全凭证 (Owner, Session, AI Token)
+├─ project.sql                      # 项目与模块特性结构 (Project, Module, Feature, Capability)
+├─ engineering.sql                  # 研发规格与工程资产 (Spec, Revision, Asset, TraceLink)
+├─ task.sql                         # 研发任务与执行授权 (Task, Authorization, AI Run)
+├─ source.sql                       # 源码仓库与快照解析 (Source, Analysis)
+└─ work_event.sql                   # 工作事件流与防篡改触发器 (Work Event, Triggers)
+
+migrations/                         # 数据库迁移 (业务语义化命名，避免 000xx 前缀)
 ├─ schema.sql                       # 初始基线
-├─ 0001_add_project_work_events.sql # 工作记录
-├─ 0002_seal_work_events.sql         # 记录只追加
+├─ work_events.sql                  # 工作记录与不可变触发器迁移
 ├─ meta/
 │  ├─ _journal.json                  # Drizzle 迁移账本
 │  └─ schema_snapshot.json           # 当前 Drizzle 快照

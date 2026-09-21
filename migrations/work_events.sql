@@ -19,7 +19,16 @@ CREATE TABLE `rd_work_event` (
 	CONSTRAINT "rd_work_event_source_allowed" CHECK("rd_work_event"."source_kind" in ('owner', 'local_web', 'ai_token'))
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `rd_work_event_id_unique` ON `rd_work_event` (`id`);--> statement-breakpoint
-CREATE UNIQUE INDEX `rd_work_event_operation_unique` ON `rd_work_event` (`project_id`,`principal_key`,`operation_id`);--> statement-breakpoint
-CREATE INDEX `rd_work_event_project_sequence` ON `rd_work_event` (`project_id`,`sequence`);--> statement-breakpoint
+CREATE UNIQUE INDEX `rd_work_event_id_unique` ON `rd_work_event` (`id`);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `rd_work_event_operation_unique` ON `rd_work_event` (`project_id`,`principal_key`,`operation_id`);
+--> statement-breakpoint
+CREATE INDEX `rd_work_event_project_sequence` ON `rd_work_event` (`project_id`,`sequence`);
+--> statement-breakpoint
 CREATE INDEX `rd_work_event_work_sequence` ON `rd_work_event` (`project_id`,`work_id`,`sequence`);
+--> statement-breakpoint
+CREATE TRIGGER IF NOT EXISTS `rd_work_event_no_update` BEFORE UPDATE ON `rd_work_event`
+BEGIN SELECT RAISE(ABORT, 'Work events are append-only'); END;
+--> statement-breakpoint
+CREATE TRIGGER IF NOT EXISTS `rd_work_event_no_delete` BEFORE DELETE ON `rd_work_event`
+BEGIN SELECT RAISE(ABORT, 'Work events are append-only'); END;
