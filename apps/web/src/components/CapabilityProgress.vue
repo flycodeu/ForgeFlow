@@ -26,7 +26,7 @@ function implementation(capability: Capability) {
   if (capability.status === 'DONE' || tasks.some((task) => ['DONE', 'CONFIRMED'].includes(task.status))) return '已完成';
   if (capability.status === 'IMPLEMENTING' || tasks.some((task) => task.status === 'RUNNING')) return '进行中';
   if (capability.status === 'BLOCKED') return '受阻';
-  return '未开始';
+  return '未登记';
 }
 function verification(capability: Capability) {
   const latest = runsOf(capability).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
@@ -58,7 +58,7 @@ function statusName(status: Capability['status']) {
         <span>功能</span>
         <span>能力明细</span>
         <span>设计</span>
-        <span>实现</span>
+        <span>实施记录</span>
         <span>验证</span>
       </div>
       <div v-if="rows.length" class="matrix-rows">
@@ -81,7 +81,7 @@ function statusName(status: Capability['status']) {
           </span>
           <span class="cell-status">
             <span class="status-badge-clean" :class="{ pass: hasDesign(capability) }">
-              {{ hasDesign(capability) ? '✓ 已设计' : '未设计' }}
+              {{ hasDesign(capability) ? '已记录设计' : '未记录设计' }}
             </span>
           </span>
           <span class="cell-status">

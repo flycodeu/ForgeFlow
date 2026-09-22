@@ -54,8 +54,6 @@ const tasks = computed(() => props.detail.tasks.filter((item) => item.featureId 
 const runs = computed(() => props.detail.runs.filter((item) => item.featureId === props.feature.id));
 const requestedRunId = new URLSearchParams(window.location.search).get('run');
 const visibleRuns = computed(() => requestedRunId ? runs.value.filter((item) => item.id === requestedRunId) : runs.value);
-const completeKinds = computed(() => blueprint.value?.completeness.filter((item) => item.exists).length ?? 0);
-const requiredKinds = computed(() => blueprint.value?.completeness.length ?? 0);
 const doneCapabilities = computed(() => capabilities.value.filter((item) => item.status === 'DONE').length);
 const selectedStructured = computed<Record<string, unknown>>(() => selectedHistoricalRevision.value?.structuredData ?? selectedAsset.value?.structuredData ?? {});
 const selectedMarkdown = computed(() => selectedHistoricalRevision.value?.contentMarkdown ?? selectedAsset.value?.contentMarkdown ?? null);
@@ -348,7 +346,7 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
           </div>
           <section class="overview-metrics">
             <div><span>功能明细</span><strong>{{ capabilities.length }}</strong><small>{{ doneCapabilities }} 项标记完成</small></div>
-            <div><span>设计资料</span><strong>{{ assets.length }}</strong></div>
+            <div><span>工程设计</span><strong>{{ assets.length }}</strong><small>另有 {{ capabilities.length }} 项操作设计</small></div>
             <div><span>实施任务</span><strong>{{ tasks.length }}</strong><small>{{ runs.length }} 次执行</small></div>
           </section>
           <section class="design-card capability-catalog">
@@ -357,9 +355,10 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
               <button v-for="item in capabilities" :key="item.id" type="button" @click="selectItem('capability', item.id)">
                 <strong><code>{{ item.code }}</code> {{ item.name }}</strong><span>{{ capabilityLabel(item.status) }} →</span>
               </button>
+              <p v-if="!capabilities.length" class="empty-copy">尚未拆分操作。下方仅有功能范围草稿，不能据此判断实现进度。</p>
             </div>
           </section>
-          <details v-if="featureDesign?.latestRevision?.content" class="design-card feature-design-accordion">
+          <details v-if="featureDesign?.latestRevision?.content" :open="!capabilities.length" class="design-card feature-design-accordion">
             <summary>功能范围与共同边界 <span>REV {{ featureDesign.latestRevision.revisionNo }}</span></summary>
             <ArchiveMarkdown class="design-document" :content="featureDesign.latestRevision.content" />
           </details>
