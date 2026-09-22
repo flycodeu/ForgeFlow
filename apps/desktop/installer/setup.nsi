@@ -20,7 +20,7 @@ BrandingText "ForgeFlow"
 !define MUI_UNICON "${APP_ICON}"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "安装 ForgeFlow"
-!define MUI_WELCOMEPAGE_TEXT "选择程序安装目录。项目数据的位置将在首次启动时设置。$\r$\n$\r$\n若检测到旧版，将自动读取历史安装位置进行无缝更新，并完整保留所有项目数据与配置。"
+!define MUI_WELCOMEPAGE_TEXT "选择程序安装目录。项目数据的位置将在首次启动时设置。$\r$\n$\r$\n升级前请从托盘停止后台并退出。安装器可读取原安装位置并就地更新程序文件；外部项目数据与配置不随程序目录覆盖。"
 !insertmacro MUI_PAGE_WELCOME
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE CheckDirectory
 !insertmacro MUI_PAGE_DIRECTORY
