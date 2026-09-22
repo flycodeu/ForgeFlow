@@ -58,10 +58,16 @@ test('AUTO Capability flow adapts design, executes without authorization, and ro
   const guidance = value<CapabilityDesignGuidance>(await mcp(token.token, 'get_capability_design_guidance', { capabilityId: capability.id }));
   assert.equal(guidance.profile, 'WEB');
   assert.match(guidance.markdownTemplate, /API \/ 协议/);
-  assert.match(guidance.markdownTemplate, /## 1\. 功能定义/);
-  assert.match(guidance.markdownTemplate, /## 8\. 异常、边界与恢复/);
-  assert.match(guidance.markdownTemplate, /## 12\. 验收用例与证据/);
-  value(await mcp(token.token, 'create_capability_design', { capabilityId: capability.id, changeSummary: '初版', content: guidance.markdownTemplate }));
+  assert.match(guidance.markdownTemplate, /### 输入字段/);
+  assert.match(guidance.markdownTemplate, /### 处理与异常/);
+  assert.doesNotMatch(guidance.markdownTemplate, /当前实现状态/);
+  const placeholder = await mcp(token.token, 'create_capability_design', {
+    capabilityId: capability.id, changeSummary: '未填写模板', content: guidance.markdownTemplate,
+  });
+  assert.equal(placeholder.json<{ result: { isError: boolean } }>().result.isError, true);
+  value(await mcp(token.token, 'create_capability_design', { capabilityId: capability.id, changeSummary: '初版',
+    content: '# U-02 新增用户\n\n管理员建立账号。\n\n### 输入字段\n\n账号和昵称必填。\n\n### 输出与状态\n\n新账号启用。\n\n### 处理与异常\n\n重复账号拒绝。\n\n### 接口与数据\n\n写用户记录。\n\n### 验收要点\n\n并发同名只创建一次。',
+  }));
   const context = value<CapabilityDetail>(await mcp(token.token, 'get_capability_context', { projectId: project.id, featureId: feature.id, capabilityId: capability.id }));
   assert.equal(context.design?.latestRevision?.revisionNo, 1);
   assert.equal(context.implementationRevision?.id, context.design?.latestRevision?.id);

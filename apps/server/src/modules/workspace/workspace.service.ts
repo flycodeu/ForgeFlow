@@ -45,6 +45,17 @@ function engineeringContentHash(structuredData: Record<string, unknown> | null, 
   return createHash('sha256').update(`${stableJson(structuredData)}\n${contentMarkdown ?? ''}`, 'utf8').digest('hex');
 }
 
+function assertUsefulAiDesign(content: string, source: string) {
+  if (!source.startsWith('ai-token:')) return;
+  const placeholders = ['待填写', '待识别', '按当前项目真实形态填写；不适用则删除',
+    '用一句完整的话说明：在什么条件下', '描述可直接实施的处理顺序', '由详细设计推导，不预设',
+    '填写这一操作对使用者产生的结果', '按真实输入列字段、类型、必填、约束',
+    '填写本功能对使用者产生的可观察结果', '逐项列 Capability 编号、名称与一句话用途'];
+  if (placeholders.some((placeholder) => content.includes(placeholder))) {
+    throw new ApiError(422, 'DESIGN_PLACEHOLDER', '设计中仍有模板占位说明；请根据当前功能填写或删去不适用章节');
+  }
+}
+
 const CANONICAL_LABELS: Record<string, string> = {
   method: 'method', '方法': 'method', path: 'path', '路径': 'path', route: 'route', '路由': 'route',
   protocol: 'protocol', '协议': 'protocol', version: 'version', '版本': 'version', type: 'type', '类型': 'type',
@@ -726,10 +737,13 @@ export class WorkspaceService {
 
   getProjectPlanningContext(projectId: string) {
     const detail = this.getProject(projectId);
-    const projectSpecifications = detail.specifications.filter((item) => item.featureId === null).map((specification) => ({
+    const currentKinds = new Set(['background', 'research', 'requirements', 'architecture', 'technology']);
+    const projectSpecifications = detail.specifications.filter((item) => item.featureId === null && currentKinds.has(item.kind)).map((specification) => ({
       type: specification.kind,
       specification: this.getSpecification(projectId, specification.id),
     }));
+    const otherSpecificationIndex = detail.specifications.filter((item) => item.featureId === null && !currentKinds.has(item.kind))
+      .map((item) => ({ id: item.id, kind: item.kind, title: item.title, latestRevisionId: item.latestRevisionId }));
     const featureDesigns = detail.features.map((feature) => {
       const specification = detail.specifications.find((item) => item.featureId === feature.id && item.capabilityId === null);
       const design = specification ? this.getSpecification(projectId, specification.id) : null;
@@ -756,6 +770,7 @@ export class WorkspaceService {
     return {
       project: detail.project,
       projectSpecifications,
+      otherSpecificationIndex,
       modules: detail.modules,
       features: featureDesigns,
       capabilities: detail.capabilities,
@@ -771,7 +786,7 @@ export class WorkspaceService {
         category: task.category, area: task.area,
         status: task.status, objective: task.objective, sortOrder: task.sortOrder,
       })),
-      planningProcess: '按当前工作需要参考已有资料与实际代码，自主选择调研、设计、实现和验证顺序。Feature 表达用户行为或可交付能力；工程底座和质量检查留在项目交付资料。功能设计写目标、行为、规则、失败与验收条件；状态、证据等级与历史执行结果单独记录，不写入设计正文。保留原有文档格式，可扩展或修正设计，不要求补齐固定章节。',
+      planningProcess: '先核对当前需求、源码和来源版本，按用户任务拆成可独立理解的操作。Feature 只写范围、操作入口和共性边界；每项操作分别写输入字段与约束、输出和状态、处理与失败、接口与数据读写、可执行验收点。只提炼与本项目当前决策有关的结论，注明事实、目标和未决；不要复制原文、DDL、哈希或无关工程状态到设计正文。未确认的接口、表字段和参数明确标为待定，不补造。历史及候选资料仅在需要时按 otherSpecificationIndex 单独读取。无变化或模板占位内容不应提交新版本。',
       planningBoundary: detail.project.workflowMode === 'AUTO'
         ? 'AUTO：AI 可创建 Revision、Capability、Task 并直接执行；AI 报告 PASS 只结束实施任务，不构成当前核验或负责人验收。不得假设存在数据库、HTTP API、UI、Frontend 或 Backend。'
         : 'CONTROLLED：保留 Design Review、Approved Baseline、Authorization 和人工确认。不得假设存在数据库、HTTP API、UI、Frontend 或 Backend。',
@@ -1420,6 +1435,7 @@ export class WorkspaceService {
   createCapabilityDesign(capabilityId: string, input: { changeSummary: string; content: string; source: string }) {
     const capability = this.repository.findCapabilityById(capabilityId);
     if (!capability) throw new ApiError(404, 'CAPABILITY_NOT_FOUND', 'Capability 不存在');
+    assertUsefulAiDesign(input.content, input.source);
     try {
       return this.repository.transaction(() => {
         if (this.repository.findCapabilitySpecification(capability.projectId, capabilityId)) {
@@ -1849,6 +1865,7 @@ export class WorkspaceService {
   }): { specification: SpecificationSummary; revision: SpecificationRevision } {
     const feature = this.repository.findFeatureById(featureId);
     if (!feature) throw new ApiError(404, 'FEATURE_NOT_FOUND', '功能不存在');
+    assertUsefulAiDesign(input.content, input.source);
     try {
       return this.repository.transaction(() => {
         if (this.repository.findFeatureSpecification(feature.projectId, featureId)) {
@@ -1925,6 +1942,10 @@ export class WorkspaceService {
         : undefined;
       if (specification.latestRevisionId && !latest) {
         throw new Error('Specification latest revision points outside its history');
+      }
+      assertUsefulAiDesign(input.content, input.source);
+      if (latest && latest.markdown.replace(/\r\n?/g, '\n').trim() === input.content.replace(/\r\n?/g, '\n').trim()) {
+        throw new ApiError(409, 'REVISION_UNCHANGED', '设计正文没有变化，无需创建新版本');
       }
       const revision = {
         id: randomUUID(),

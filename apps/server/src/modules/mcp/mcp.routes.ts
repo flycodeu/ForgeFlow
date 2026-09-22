@@ -277,7 +277,7 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
 
   server.registerTool('get_project_planning_context', {
     title: '读取项目规划上下文',
-    description: '按需读取项目背景、资料、功能和任务摘要作为参考；不限制 AI 原有规划顺序或文档格式，可自主扩展设计。',
+    description: '读取当前五类项目资料、功能与任务；历史/候选资料仅提供索引，必要时按需读取，勿将原文和状态摘要复制为设计。',
     inputSchema: z.object({ projectId: z.string().uuid() }).strict(),
     annotations: { readOnlyHint: true },
   }, safely(({ projectId }: { projectId: string }) => workspace.getProjectPlanningContext(projectId)));
@@ -317,7 +317,7 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
 
   server.registerTool('create_spec_revision', {
     title: '创建设计资料 Revision',
-    description: '为项目资料或 Feature Design 创建不可变新版本；必须提交刚读取到的 expectedHeadRevisionId。',
+    description: '按当前需求和真实来源提炼有变化的设计；必须提交刚读取到的 expectedHeadRevisionId。无变化和未填写模板会拒绝。',
     inputSchema: z.object({
       specId: z.string().uuid(),
       expectedHeadRevisionId: z.string().uuid().nullable(),
@@ -371,7 +371,7 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
 
   server.registerTool('create_feature_design', {
     title: '创建 Feature Design 初版',
-    description: '为尚无设计的用户行为或可交付能力保存 Markdown 设计及首个不可变版本。写清目标、行为、规则、失败与验收条件；工程交付记录和状态/证据摘要应写入项目资料或工作记录，不作为功能设计正文。无需固定章节。',
+    description: 'Feature 初版只写目标、操作入口、共同规则和未决；逐项字段、状态、异常、接口与表关系进入 Capability。不要复制原文、DDL、哈希或工程状态。',
     inputSchema: z.object({
       featureId: z.string().uuid(),
       changeSummary: z.string().trim().min(1).max(500),
@@ -383,7 +383,7 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
 
   server.registerTool('create_capability_design', {
     title: '创建 Capability Design 初版',
-    description: '创建 Capability 的版本化详细设计。AUTO 项目最新 Revision 立即作为实施设计；CONTROLLED 项目仍使用批准版本。',
+    description: '一项操作一张设计卡：具体字段、输入输出、状态、失败、实际契约与数据关系、可验收结果；未定内容标待定，不提交模板占位。AUTO 最新 Revision 即实施设计，CONTROLLED 仍用批准版。',
     inputSchema: z.object({ capabilityId: z.string().uuid(), changeSummary: z.string().trim().min(1).max(500), content: z.string().min(1).max(200_000) }).strict(),
     annotations: { destructiveHint: false, openWorldHint: false },
   }, safely((input: { capabilityId: string; changeSummary: string; content: string }) =>

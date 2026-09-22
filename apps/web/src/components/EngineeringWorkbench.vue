@@ -6,6 +6,7 @@ import type {
 import { api as getJson } from '../api-client';
 import ArchiveMarkdown from './ArchiveMarkdown.vue';
 import CapabilityDesignView from './CapabilityDesignView.vue';
+import SqlDataModelView from './SqlDataModelView.vue';
 
 type NavFolder = { kind: string; label: string };
 type NavGroup = { key: string; label: string; folders: NavFolder[] };
@@ -58,6 +59,8 @@ const requiredKinds = computed(() => blueprint.value?.completeness.length ?? 0);
 const doneCapabilities = computed(() => capabilities.value.filter((item) => item.status === 'DONE').length);
 const selectedStructured = computed<Record<string, unknown>>(() => selectedHistoricalRevision.value?.structuredData ?? selectedAsset.value?.structuredData ?? {});
 const selectedMarkdown = computed(() => selectedHistoricalRevision.value?.contentMarkdown ?? selectedAsset.value?.contentMarkdown ?? null);
+const isSqlDataModel = computed(() => selectedAsset.value?.kind === 'DATA_MODEL'
+  && Array.isArray(selectedStructured.value.fields) && Boolean(selectedStructured.value.sqlPath));
 const selectedTables = computed(() => buildTables(selectedStructured.value));
 const selectedFacts = computed(() => Object.entries(selectedStructured.value)
   .filter(([, value]) => !Array.isArray(value) && (typeof value !== 'object' || value === null))
@@ -372,14 +375,17 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
             <div class="revision-history-list"><button v-for="revision in assetHistory" :key="revision.id" type="button" :class="{ active: selectedRevisionId === revision.id }" @click="selectedRevisionId = selectedRevisionId === revision.id ? '' : revision.id"><strong>版本 {{ revision.revisionNo }}</strong><span>{{ revision.changeSummary }}</span><small>{{ revision.source }} · {{ new Date(revision.createdAt).toLocaleString('zh-CN') }}</small><b>{{ revision.id === selectedAsset.currentRevisionId ? '当前' : '只读' }}</b></button></div>
           </section>
           <section v-if="selectedAsset.canonicalStatus === 'CONFLICT'" class="canonical-warning"><strong>核心数据冲突</strong><span>{{ selectedAsset.canonicalConflicts.join('；') }}</span></section>
-          <dl v-if="selectedFacts.length" class="fact-grid">
-            <div v-for="([key, value]) in selectedFacts" :key="key"><dt>{{ keyLabel(key) }}</dt><dd>{{ valueText(value) }}</dd></div>
-          </dl>
-          <section v-for="table in selectedTables" :key="table.title" class="design-card table-card">
-            <header><h3>{{ table.title }}</h3><span>{{ table.rows.length }} 项</span></header>
-            <div class="table-scroll"><table><thead><tr><th v-for="column in table.columns" :key="column">{{ column }}</th></tr></thead><tbody><tr v-for="(row, rowIndex) in table.rows" :key="rowIndex"><td v-for="(cell, index) in row" :key="index">{{ cell }}</td></tr></tbody></table></div>
-          </section>
-          <section v-if="selectedMarkdown" class="design-card narrative-card"><header><h3>设计说明</h3></header><ArchiveMarkdown class="narrative" :content="selectedMarkdown" /><details class="design-source"><summary>查看原文</summary><pre>{{ selectedMarkdown }}</pre></details></section>
+          <SqlDataModelView v-if="isSqlDataModel" :data="selectedStructured" :markdown="selectedMarkdown" />
+          <template v-else>
+            <dl v-if="selectedFacts.length" class="fact-grid">
+              <div v-for="([key, value]) in selectedFacts" :key="key"><dt>{{ keyLabel(key) }}</dt><dd>{{ valueText(value) }}</dd></div>
+            </dl>
+            <section v-for="table in selectedTables" :key="table.title" class="design-card table-card">
+              <header><h3>{{ table.title }}</h3><span>{{ table.rows.length }} 项</span></header>
+              <div class="table-scroll"><table><thead><tr><th v-for="column in table.columns" :key="column">{{ column }}</th></tr></thead><tbody><tr v-for="(row, rowIndex) in table.rows" :key="rowIndex"><td v-for="(cell, index) in row" :key="index">{{ cell }}</td></tr></tbody></table></div>
+            </section>
+            <section v-if="selectedMarkdown" class="design-card narrative-card"><header><h3>设计说明</h3></header><ArchiveMarkdown class="narrative" :content="selectedMarkdown" /><details class="design-source"><summary>查看原文</summary><pre>{{ selectedMarkdown }}</pre></details></section>
+          </template>
           <section class="design-card trace-card"><header><h3>关联</h3></header><div v-if="(blueprint?.traceLinks ?? []).filter(link => link.sourceId === selectedAsset?.id || link.targetId === selectedAsset?.id).length" class="trace-list"><div v-for="link in (blueprint?.traceLinks ?? []).filter(link => link.sourceId === selectedAsset?.id || link.targetId === selectedAsset?.id)" :key="link.id"><strong>{{ traceLeft(link) }}</strong><span>{{ relationLabel(link.relation) }}</span><strong>{{ traceRight(link) }}</strong></div></div><p v-else class="empty-copy">暂无显式追踪关系。</p></section>
         </template>
 

@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import test from 'node:test';
 import type { AiRun, CreatedAiToken, Feature, Module, Project, ProjectDetail, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary, SpecificationSummary, Task, TaskAuthorization } from '@forgeflow/contracts';
 import { createApp } from '../../app.js';
+import { openDatabase } from '../../db/client.js';
+import { WorkspaceRepository } from './workspace.repository.js';
+import { WorkspaceService } from './workspace.service.js';
 
 test('Project and Specification revisions form a persistent, conflict-safe API flow', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'forgeflow-workspace-'));
@@ -236,6 +239,11 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   assert.equal(second.statusCode, 201);
   const revision2 = second.json<SpecificationRevision>();
   assert.equal(revision2.revisionNo, 2);
+  const unchanged = await send({ method: 'POST', url: `${specPath}/revisions`, payload: {
+    content: '# 第二版\r\n目标 B  ', changeSummary: '重复提交', expectedHeadRevisionId: revision2.id,
+  } });
+  assert.equal(unchanged.statusCode, 409);
+  assert.equal(unchanged.json().error.code, 'REVISION_UNCHANGED');
 
   const stale = await send({ method: 'POST', url: `${specPath}/revisions`, payload: {
     content: '# 过期修改', changeSummary: '旧窗口提交', expectedHeadRevisionId: revision1.id,
@@ -282,6 +290,19 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   assert.equal(persistedTasks.find((item) => item.code === 'T02')?.status, 'CONFIRMED');
   assert.equal((await send({ method: 'GET', url: `${projectPath}/runs` })).json<AiRun[]>().length, 4);
   assert.equal((await send({ method: 'GET', url: `${projectPath}/runs/${submittedRun.id}` })).json<AiRun>().summary, '完成 Backend 实现');
+  const archived = (await send({ method: 'POST', url: `${projectPath}/specifications`, payload: {
+    kind: 'legacy-delivery-test', title: '旧工程状态摘要',
+  } })).json<SpecificationSummary>();
+  await send({ method: 'POST', url: `${projectPath}/specifications/${archived.id}/revisions`, payload: {
+    content: 'ACCEPTANCE_PENDING 工程质量检查旧文', changeSummary: '保留历史', expectedHeadRevisionId: null,
+  } });
+  const readConnection = openDatabase(join(directory, 'forgeflow.db'));
+  try {
+    const planning = new WorkspaceService(new WorkspaceRepository(readConnection)).getProjectPlanningContext(project.id);
+    assert.deepEqual(planning.projectSpecifications.map((item) => item.type), ['requirements']);
+    assert.ok(planning.otherSpecificationIndex.some((item) => item.id === archived.id));
+    assert.ok(!JSON.stringify(planning).includes('ACCEPTANCE_PENDING'));
+  } finally { readConnection.sqlite.close(); }
   assert.equal((await send({ method: 'GET', url: `${returnTaskPath}/authorizations` })).json<TaskAuthorization[]>()[0]?.status, 'REVOKED');
 });
 
