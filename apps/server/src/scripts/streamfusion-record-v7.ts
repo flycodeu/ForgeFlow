@@ -108,11 +108,13 @@ try {
     try { integrity(backup); baseline(open(backup).archive.exportProject(projectId)); } finally { backup.close(); }
     sqlite.transaction(() => {
       baseline(archive.exportProject(projectId));
+      let currentRequirementsRevisionId = '';
       for (const doc of documents) {
         const spec = specs.get(doc.kind)!;
-        workspace.createRevision(projectId, spec.id, { content: doc.content, expectedHeadRevisionId: spec.latestRevisionId,
+        const revision = workspace.createRevision(projectId, spec.id, { content: doc.content, expectedHeadRevisionId: spec.latestRevisionId,
           changeSummary: '按实时视频推理产品全链路重写，区分当前事实、候选与待验证决定',
           source: `local:docs/${doc.name}@sha256:${doc.hash}` });
+        if (doc.kind === 'requirements') currentRequirementsRevisionId = revision.id;
         assert(sqlite.prepare('UPDATE rd_spec SET title = ? WHERE id = ? AND title = ?')
           .run(doc.title, spec.id, spec.title).changes === 1, `资料标题已变化：${doc.kind}`);
       }
@@ -122,10 +124,17 @@ try {
           changeSummary: '补全功能结构与职责边界；具体操作字段和契约留待场景确认',
           source: `local:docs/${mapName}#${code}@sha256:${mapHash}` });
       }
+      assert(currentRequirementsRevisionId, '当前需求版本缺失');
+      for (const capability of before.project.capabilities) {
+        workspace.createTraceLink(projectId, { sourceType: 'REQUIREMENT_REVISION',
+          sourceId: currentRequirementsRevisionId, targetType: 'CAPABILITY',
+          targetId: capability.id, relation: 'DERIVED_FROM' });
+      }
       const after = archive.exportProject(projectId);
       assert(after.project.features.length === before.project.features.length + additions.length
         && after.project.specifications.length === before.project.specifications.length + additions.length
         && after.specificationRevisions.length === before.specificationRevisions.length + documents.length + additions.length
+        && after.project.traceLinks.length === before.project.traceLinks.length + before.project.capabilities.length
         && after.project.capabilities.length === before.project.capabilities.length
         && after.project.tasks.length === 0 && after.project.runs.length === 0
         && after.project.reviews.length === 0, '更新后数量/状态异常');
