@@ -152,15 +152,19 @@ function latestAnalysis(sourceId: string) { return analyses.value.find((item) =>
 function sourceStatus(source: ProjectSource) {
   const analysis = latestAnalysis(source.id);
   if (analysis?.status === 'SYNCED') return '已同步';
+  if (analysis?.status === 'STALE') return '分析已过期';
   if (analysis?.status === 'WAITING_AI') return '等待 AI';
+  if (analysis?.status === 'READING') return '读取中';
   if (analysis?.status === 'PARTIAL') return '部分完成';
+  if (analysis?.status === 'FAILED') return '分析失败';
   if (source.locations.some((item) => item.accessibility === 'ACCESSIBLE')) return '可访问';
   if (source.locations.some((item) => item.accessibility === 'INACCESSIBLE')) return '不可访问';
   return '已登记';
 }
 function sourceTone(source: ProjectSource) {
   const status = sourceStatus(source);
-  return status === '已同步' || status === '可访问' ? 'success' : status === '不可访问' ? 'danger' : 'waiting';
+  return status === '已同步' || status === '可访问' ? 'success'
+    : status === '不可访问' || status === '分析失败' ? 'danger' : 'waiting';
 }
 function firstPath(source: ProjectSource) { return source.locations[0]?.localRoot ?? '未登记环境位置'; }
 function formatTime(value: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'; }

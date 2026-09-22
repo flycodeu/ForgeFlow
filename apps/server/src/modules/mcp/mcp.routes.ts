@@ -371,7 +371,7 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
 
   server.registerTool('create_feature_design', {
     title: '创建 Feature Design 初版',
-    description: '为尚无设计的功能保存原格式 Markdown 设计及首个不可变版本；无需先调用设计指导或使用固定章节，内容应对应实际项目。',
+    description: '为尚无设计的用户行为或可交付能力保存 Markdown 设计及首个不可变版本。写清目标、行为、规则、失败与验收条件；工程交付记录和状态/证据摘要应写入项目资料或工作记录，不作为功能设计正文。无需固定章节。',
     inputSchema: z.object({
       featureId: z.string().uuid(),
       changeSummary: z.string().trim().min(1).max(500),

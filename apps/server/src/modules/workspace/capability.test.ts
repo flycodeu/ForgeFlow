@@ -65,6 +65,8 @@ test('AUTO Capability flow adapts design, executes without authorization, and ro
   const context = value<CapabilityDetail>(await mcp(token.token, 'get_capability_context', { projectId: project.id, featureId: feature.id, capabilityId: capability.id }));
   assert.equal(context.design?.latestRevision?.revisionNo, 1);
   assert.equal(context.implementationRevision?.id, context.design?.latestRevision?.id);
+  assert.equal((await rest<Feature>('GET', `${base}/features/${feature.id}`)).status, 'DESIGNING',
+    'a saved but unreviewed design does not make a feature ready for implementation');
 
   const task = value<Task>(await mcp(token.token, 'create_task_plan', {
     featureId: feature.id, capabilityId: capability.id, code: 'T-U02', name: '实现新增用户', type: 'OTHER',
@@ -85,6 +87,20 @@ test('AUTO Capability flow adapts design, executes without authorization, and ro
   assert.equal(lifecycle.stages.find((stage) => stage.key === 'verification')?.summary, '0 / 1 有当前核验');
   assert.equal(lifecycle.stages.find((stage) => stage.key === 'complete')?.summary, '0 / 1 已验收');
   assert.equal((await rest<Feature>('GET', `${base}/features/${feature.id}`)).status, 'VERIFYING');
+  const projectContext = value<{ featureEvidence: Array<{
+    featureId: string; currentVerification: string; acceptance: string;
+    latestReport: { origin: string; reportedStatus: string } | null;
+  }> }>(await mcp(token.token, 'get_project_context', { projectId: project.id }));
+  assert.deepEqual(projectContext.featureEvidence.find((item) => item.featureId === feature.id), {
+    featureId: feature.id, status: 'VERIFYING',
+    design: null,
+    capabilityDesigns: [{ capabilityId: capability.id, specificationId: context.design!.specification.id,
+      latestRevisionId: context.design!.latestRevision!.id, approvedRevisionId: null }],
+    latestReport: { runId: run.id, submittedAt: finished.runs[0]!.submittedAt, reportedStatus: 'PASS',
+      origin: 'AI_REPORTED', evidenceStatus: 'REPORTED', designSnapshotStatus: 'CURRENT', designSnapshotWarnings: [] },
+    verificationCoverage: { passed: 0, total: 1 },
+    currentVerification: 'UNVERIFIED', acceptance: 'NOT_RECORDED',
+  });
   const aiAcceptance = await app.inject({ method: 'PATCH', url: `${base}/features/${feature.id}`,
     headers: { authorization: `Bearer ${token.token}` }, payload: { status: 'ACCEPTED' } });
   assert.equal(aiAcceptance.statusCode, 403);
@@ -110,6 +126,12 @@ test('AUTO Capability flow adapts design, executes without authorization, and ro
     verificationSummary: { reportedStatus: 'PASS', summary: 'CI PASS', origin: 'CI' }, issues: [] });
   assert.equal((await rest<ProjectLifecycle>('GET', `${base}/lifecycle`)).stages.find((stage) => stage.key === 'verification')?.summary,
     '1 / 1 有当前核验');
+  const planning = value<{ featureEvidence: Array<{ featureId: string; currentVerification: string;
+    verificationCoverage: { passed: number; total: number } }> }>(
+    await mcp(token.token, 'get_project_planning_context', { projectId: project.id }));
+  assert.equal(planning.featureEvidence.find((item) => item.featureId === feature.id)?.currentVerification, 'PASS');
+  assert.deepEqual(planning.featureEvidence.find((item) => item.featureId === feature.id)?.verificationCoverage,
+    { passed: 1, total: 1 });
 
   const failedRun = await verificationTask('CI_FAILURE');
   workspace.submitRun(project.id, failedRun.id, { summary: 'CI 失败', resultCommit: null, changedFiles: [],
@@ -122,12 +144,21 @@ test('AUTO Capability flow adapts design, executes without authorization, and ro
     verificationSummary: { reportedStatus: 'PASS', summary: 'CI PASS', origin: 'CI' }, issues: [] });
   assert.equal((await rest<ProjectLifecycle>('GET', `${base}/lifecycle`)).stages.find((stage) => stage.key === 'verification')?.summary,
     '1 / 1 有当前核验');
+  await rest<Capability>('POST', `${base}/features/${feature.id}/capabilities`, {
+    code: 'U-03', name: '停用用户', summary: '停用时撤销访问', sortOrder: 20,
+  });
+  const partial = value<{ featureEvidence: Array<{ featureId: string; currentVerification: string;
+    verificationCoverage: { passed: number; total: number } }> }>(
+    await mcp(token.token, 'get_project_context', { projectId: project.id }));
+  assert.deepEqual(partial.featureEvidence.find((item) => item.featureId === feature.id)?.verificationCoverage,
+    { passed: 1, total: 2 });
+  assert.equal(partial.featureEvidence.find((item) => item.featureId === feature.id)?.currentVerification, 'UNVERIFIED');
   await rest('POST', `${base}/specifications/${context.design!.specification.id}/revisions`, {
     content: '# 功能目标\n修订新增用户行为和验收条件。', changeSummary: '更新设计后需重新核验',
     expectedHeadRevisionId: context.design!.latestRevision!.id,
   });
   assert.equal((await rest<ProjectLifecycle>('GET', `${base}/lifecycle`)).stages.find((stage) => stage.key === 'verification')?.summary,
-    '0 / 1 有当前核验');
+    '0 / 2 有当前核验');
 
   for (const sample of [
     { key: 'GODOT', type: 'Godot 4.4 2D', profile: 'game', name: '使用物品', include: /Scene \/ Node/, exclude: /API \/ 协议|Controller|数据库表/ },

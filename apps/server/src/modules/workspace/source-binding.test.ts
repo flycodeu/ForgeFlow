@@ -159,4 +159,40 @@ test('multi-source bindings stay project-scoped and analysis results round-trip 
   assert.deepEqual(detail.engineeringAssets, []);
   assert.deepEqual(detail.tasks, []);
   assert.deepEqual(detail.runs, []);
+
+  const metadataOnly = await rest<ProjectSource>('PATCH', `/api/projects/${project.id}/sources/${backend.id}`, {
+    ...sourcePayload('backend', '业务后端（更新名称）', '任务 API 与数据处理', '/home/fly/video-api', 'backend-rename'),
+    environmentKey: 'server-dev', expectedUpdatedAt: detail.sources.find((item) => item.id === backend.id)!.updatedAt,
+  });
+  assert.equal((await rest<ProjectDetail>('GET', `/api/projects/${project.id}`)).sourceAnalyses[0]?.status, 'SYNCED');
+  const moved = await rest<ProjectSource>('PATCH', `/api/projects/${project.id}/sources/${backend.id}`, {
+    ...sourcePayload('backend', '业务后端（更新名称）', '任务 API 与数据处理', 'E:\\Services\\video-api-next', 'backend-move'),
+    environmentKey: 'flycode-pc', expectedUpdatedAt: metadataOnly.updatedAt,
+  });
+  assert.equal(moved.locations.find((item) => item.environmentKey === 'flycode-pc')?.analysisStatus, 'STALE');
+  assert.equal(moved.locations.find((item) => item.environmentKey === 'server-dev')?.analysisStatus, 'NOT_REQUESTED');
+  const staleDetail = await rest<ProjectDetail>('GET', `/api/projects/${project.id}`);
+  assert.equal(staleDetail.sourceAnalyses[0]?.status, 'STALE');
+  assert.equal(staleDetail.sourceAnalyses[0]?.summary, submitted.summary);
+  assert.deepEqual(staleDetail.sourceAnalyses[0]?.sourceSnapshots, submitted.sourceSnapshots);
+
+  const pending = success<SourceAnalysis>(await call(planner.token, 'request_source_analysis', {
+    projectId: project.id, sourceIds: [backend.id], environmentKey: 'server-dev',
+  }));
+  success<SourceAnalysis>(await call(planner.token, 'claim_source_analysis', {
+    projectId: project.id, analysisId: pending.id,
+  }));
+  const scoped = await rest<ProjectSource>('PATCH', `/api/projects/${project.id}/sources/${backend.id}`, {
+    ...sourcePayload('backend', '业务后端（更新名称）', '任务 API 与数据处理', '/home/fly/video-api', 'backend-scope'),
+    environmentKey: 'server-dev', expectedUpdatedAt: (await rest<ProjectDetail>('GET', `/api/projects/${project.id}`))
+      .sources.find((item) => item.id === backend.id)!.updatedAt,
+    scope: { include: ['src/**'], exclude: ['custom-cache/**'] },
+  });
+  assert.equal(scoped.locations.find((item) => item.environmentKey === 'server-dev')?.analysisStatus, 'STALE');
+  assert.equal((await rest<ProjectDetail>('GET', `/api/projects/${project.id}`)).sourceAnalyses.find((item) => item.id === pending.id)?.status, 'STALE');
+  const rejected = toolError(await call(planner.token, 'submit_source_analysis', {
+    projectId: project.id, analysisId: pending.id, status: 'SYNCED', summary: '旧范围的结果',
+    sourceSnapshots: { [backend.id]: { root: '/home/fly/video-api' } },
+  }));
+  assert.equal(rejected.code, 'SOURCE_ANALYSIS_NOT_ACTIVE');
 });

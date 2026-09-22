@@ -12,13 +12,14 @@ import ResearchWorkspace from './components/ResearchWorkspace.vue';
 import SourceIntegration from './components/SourceIntegration.vue';
 import TestingWorkspace from './components/TestingWorkspace.vue';
 import ProjectArchive from './components/ProjectArchive.vue';
+import ProjectMaterials from './components/ProjectMaterials.vue';
 import StorageSettings from './components/StorageSettings.vue';
 import ArchiveRestore from './components/ArchiveRestore.vue';
 import Icon from './components/Icon.vue';
 import { api, ApiRequestError } from './api-client';
 import './app.css';
 
-type WorkspacePage = 'projects' | 'overview' | 'background' | 'research' | 'requirements' | 'architecture' | 'technology'
+type WorkspacePage = 'projects' | 'overview' | 'materials' | 'background' | 'research' | 'requirements' | 'architecture' | 'technology'
   | 'sources' | 'features' | 'feature-detail' | 'planning' | 'development' | 'testing' | 'ai' | 'history' | 'document' | 'archive' | 'records';
 type DocumentPage = 'background' | 'research' | 'requirements' | 'architecture' | 'technology' | 'document';
 type RevisionActivity = SpecificationRevisionSummary & { specification: SpecificationSummary };
@@ -69,6 +70,7 @@ const error = ref('');
 const notice = ref('');
 const busy = ref(false);
 const archiveView = ref<{ canLeave: () => boolean } | null>(null);
+const archiveDocumentId = ref<string | null>(null);
 const projectKey = ref('');
 const projectName = ref('');
 const projectDescription = ref('');
@@ -186,6 +188,7 @@ const navSections: NavSection[] = [
     items: [
       { id: 'overview', label: '概览', icon: 'overview' },
       { id: 'features', label: '功能清单', icon: 'features' },
+      { id: 'materials', label: '资料总览', icon: 'archive' },
       { id: 'records', label: '工作记录', icon: 'records' },
       { id: 'archive', label: '项目档案', icon: 'archive' },
     ],
@@ -614,7 +617,7 @@ async function refreshCurrentProject() {
 }
 async function selectProject(id: string) {
   if (archiveView.value && !archiveView.value.canLeave()) return;
-  clearMessage(); busy.value = true; selectedProjectId.value = id; selectedSpecId.value = null;
+  clearMessage(); busy.value = true; selectedProjectId.value = id; selectedSpecId.value = null; archiveDocumentId.value = null;
   specificationDetail.value = null; selectedRevision.value = null; revisions.value = []; projectActivity.value = [];
   try { await refreshCurrentProject(); featureSearch.value = ''; workspacePage.value = 'features'; mobileNavOpen.value = false; }
   catch (cause) { showError(cause); } finally { busy.value = false; }
@@ -639,6 +642,7 @@ function navigate(page: WorkspacePage) {
   if (page !== workspacePage.value && archiveView.value && !archiveView.value.canLeave()) return;
   clearMessage(); mobileNavOpen.value = false;
   if (['background', 'research', 'requirements', 'architecture', 'technology'].includes(page)) { void openDocumentPage(page as DocumentPage); return; }
+  if (page === 'archive') archiveDocumentId.value = null;
   workspacePage.value = page;
   if (page === 'ai' && !selectedRun.value) selectedRun.value = sortedRuns.value[0] ?? null;
 }
@@ -654,6 +658,10 @@ function openOtherMaterial(spec: SpecificationSummary) {
         : spec.kind === 'architecture' ? 'architecture'
           : spec.kind === 'technology' ? 'technology' : 'document';
   void openDocumentPage(page, spec);
+}
+function openArchiveDocument(id: string) {
+  navigate('archive');
+  if (workspacePage.value === 'archive') archiveDocumentId.value = id;
 }
 function toggleModule(moduleId: string) {
   const next = new Set(collapsedModules.value);
@@ -1356,6 +1364,9 @@ onMounted(async () => {
           </template>
 
           <ResearchWorkspace v-if="workspacePage === 'research'" :specification="currentSpecification" :revision="selectedRevision" @create="currentSpecification ? startRevision() : prepareNewMaterial('research')" />
+          <ProjectMaterials v-if="workspacePage === 'materials'" :project-id="currentProject.id" :specifications="projectDetail.specifications"
+            :features="projectDetail.features" :capabilities="projectDetail.capabilities" @open-specification="openOtherMaterial"
+            @open-document="openArchiveDocument" @open-capability="openFeature" />
 
           <SourceIntegration v-if="workspacePage === 'sources'" :project-id="currentProject.id" :sources="projectDetail.sources" :analyses="projectDetail.sourceAnalyses"
             @refresh="refreshCurrentProject" @notice="notice = $event; error = ''" @error="error = $event; notice = ''" />
@@ -1633,7 +1644,7 @@ onMounted(async () => {
            <template v-if="workspacePage === 'planning'"><div class="compact-page-heading"><div class="heading-title-group"><h1>开发计划</h1><span class="heading-badge">共 {{ projectDetail.features.length }} 项功能</span></div></div><section class="surface plan-board"><div class="plan-board-head"><span>功能 / 模块</span><span>设计</span><span>关联任务</span><span>状态</span></div><button v-for="feature in projectDetail.features" :key="feature.id" type="button" class="plan-board-row" @click="openFeature(feature)"><span class="plan-feature-cell"><strong>{{ feature.name }}</strong></span><span class="plan-spec-cell"><span class="spec-status-badge">{{ projectDetail.project.workflowMode === 'AUTO' ? (projectDetail.specifications.find(item => item.featureId === feature.id)?.latestRevisionNumber ? '已记录' : '待设计') : (projectDetail.specifications.find(item => item.featureId === feature.id)?.approvedRevisionNumber ? '已批准' : '待批准') }}</span></span><span class="plan-tasks-cell"><i v-for="task in tasksForFeature(feature.id)" :key="task.id" class="task-tag">{{ taskCategoryName(task.category) }}<b v-if="task.area"> / {{ task.area }}</b></i><em v-if="!tasksForFeature(feature.id).length" class="no-task">待规划</em></span><span class="plan-action-cell">{{ tasksForFeature(feature.id).length }} 项 <b>→</b></span></button><div v-if="!projectDetail.features.length" class="compact-empty">暂无功能</div></section></template>
 
           <CapabilityProgress v-if="workspacePage === 'development'" :detail="projectDetail" mode="development" @open-feature="openFeature" />
-          <ProjectArchive v-if="workspacePage === 'archive' || workspacePage === 'records'" ref="archiveView" :key="projectDetail.project.id + workspacePage" :project-id="projectDetail.project.id" :initial-tab="workspacePage === 'records' ? 'records' : 'documents'" />
+          <ProjectArchive v-if="workspacePage === 'archive' || workspacePage === 'records'" ref="archiveView" :key="projectDetail.project.id + workspacePage" :project-id="projectDetail.project.id" :initial-tab="workspacePage === 'records' ? 'records' : 'documents'" :initial-document-id="archiveDocumentId" />
           <TestingWorkspace v-if="workspacePage === 'testing'" :detail="projectDetail" @open-feature="openFeature" />
           <template v-if="workspacePage === 'ai'">
             <div class="compact-page-heading"><div class="heading-title-group"><h1>执行记录</h1><span class="heading-badge">共 {{ sortedRuns.length }} 次运行</span></div></div>

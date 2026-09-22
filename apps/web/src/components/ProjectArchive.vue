@@ -5,7 +5,7 @@ import { api, ApiRequestError } from '../api-client';
 import ArchiveMarkdown from './ArchiveMarkdown.vue';
 import CaptureSettings from './CaptureSettings.vue';
 
-const props = defineProps<{ projectId: string; initialTab?: 'documents' | 'records' }>();
+const props = defineProps<{ projectId: string; initialTab?: 'documents' | 'records'; initialDocumentId?: string | null }>();
 const emit = defineEmits<{ changed: [] }>();
 const view = ref<'documents' | 'records'>(props.initialTab ?? 'documents');
 const documents = ref<ArchiveDocument[]>([]);
@@ -94,6 +94,9 @@ async function load() {
     documents.value = docs;
     events.value = page.items;
     nextCursor.value = page.nextCursor;
+    if (props.initialDocumentId && !document.value && docs.some((item) => item.id === props.initialDocumentId)) {
+      await selectDocument(props.initialDocumentId);
+    }
   } catch (cause) { if (epoch === projectEpoch && request === listRequest) error.value = message(cause); }
   finally { if (epoch === projectEpoch && request === listRequest) loading.value = false; }
 }

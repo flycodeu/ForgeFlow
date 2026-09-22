@@ -528,17 +528,39 @@ export class WorkspaceService {
     const existingIndex = locations.findIndex((location) => location.environmentKey.toLowerCase() === environmentKey);
     const normalizedLocalRoot = normalizeLocalRoot(localRoot);
     const existing = existingIndex >= 0 ? locations[existingIndex]! : null;
+    const sharedDefinitionChanged = current.sourceKind !== input.sourceKind || current.remoteUrl !== remoteUrl
+      || current.repoSubdir !== repoSubdir || stableJson(parseJson(current.scopeJson, sourceScope())) !== stableJson(scope);
+    const locationChanged = !existing || existing.normalizedLocalRoot !== normalizedLocalRoot;
+    const affectedEnvironments = sharedDefinitionChanged
+      ? new Set(locations.map((item) => item.environmentKey.toLowerCase()))
+      : new Set(locationChanged ? [environmentKey] : []);
     const location: StoredSourceLocation = {
       environmentKey, localRoot, normalizedLocalRoot,
-      accessibility: existing?.normalizedLocalRoot === normalizedLocalRoot ? existing.accessibility : 'UNKNOWN',
-      analysisStatus: existing?.normalizedLocalRoot === normalizedLocalRoot ? existing.analysisStatus : 'NOT_REQUESTED',
-      lastCheckedAt: existing?.normalizedLocalRoot === normalizedLocalRoot ? existing.lastCheckedAt : null,
+      accessibility: !locationChanged ? existing!.accessibility : 'UNKNOWN',
+      analysisStatus: !locationChanged ? existing!.analysisStatus
+        : existing && ['WAITING_AI', 'READING', 'PARTIAL', 'SYNCED'].includes(existing.analysisStatus) ? 'STALE' : 'NOT_REQUESTED',
+      lastCheckedAt: !locationChanged ? existing!.lastCheckedAt : null,
     };
     if (existingIndex >= 0) locations.splice(existingIndex, 1, location); else locations.push(location);
+    for (const item of locations) {
+      if (affectedEnvironments.has(item.environmentKey.toLowerCase())
+        && ['WAITING_AI', 'READING', 'PARTIAL', 'SYNCED'].includes(item.analysisStatus)) {
+        item.analysisStatus = 'STALE';
+      }
+    }
     const values = { alias, displayName, purpose, sourceKind: input.sourceKind, remoteUrl, repoSubdir,
       scopeJson: JSON.stringify(scope), locationsJson: JSON.stringify(locations), status: 'REGISTERED',
       lastIdempotencyKey: idempotencyKey, updatedAt: now };
-    try { this.repository.updateProjectSource(input.projectId, current.id, values); }
+    try { this.repository.transaction(() => {
+      this.repository.updateProjectSource(input.projectId, current.id, values);
+      for (const analysis of this.repository.listSourceAnalyses(input.projectId)) {
+        if (['WAITING_AI', 'READING', 'PARTIAL', 'SYNCED'].includes(analysis.status)
+          && affectedEnvironments.has(analysis.environmentKey.toLowerCase())
+          && parseJson<string[]>(analysis.requestedSourceIdsJson, []).includes(current.id)) {
+          this.repository.updateSourceAnalysis(input.projectId, analysis.id, { status: 'STALE', updatedAt: now });
+        }
+      }
+    }); }
     catch (error) {
       if (isUniqueConstraint(error)) throw new ApiError(409, 'SOURCE_ALIAS_EXISTS', '同一项目中的源码别名不能重复');
       throw error;
@@ -682,10 +704,12 @@ export class WorkspaceService {
     }));
     return {
       project: detail.project,
+      sources: detail.sources,
       currentDocuments,
       modules: detail.modules,
       features: detail.features,
       capabilities: detail.capabilities,
+      featureEvidence: this.featureEvidence(detail),
       sourceAnalyses: detail.sourceAnalyses.map((analysis) => ({
         id: analysis.id, status: analysis.status, requestedSourceIds: analysis.requestedSourceIds,
         requestedAt: analysis.requestedAt, completedAt: analysis.completedAt,
@@ -735,6 +759,7 @@ export class WorkspaceService {
       modules: detail.modules,
       features: featureDesigns,
       capabilities: detail.capabilities,
+      featureEvidence: this.featureEvidence(detail),
       sourceAnalyses: detail.sourceAnalyses.map((analysis) => ({
         id: analysis.id, status: analysis.status, requestedSourceIds: analysis.requestedSourceIds,
         requestedAt: analysis.requestedAt, completedAt: analysis.completedAt,
@@ -746,11 +771,44 @@ export class WorkspaceService {
         category: task.category, area: task.area,
         status: task.status, objective: task.objective, sortOrder: task.sortOrder,
       })),
-      planningProcess: '按当前工作需要参考已有资料与实际代码，自主选择调研、设计、实现和验证顺序。保留原有文档格式；可扩展或修正设计，并通过项目档案记录计划、变化、结果和未验证范围，不要求补齐固定章节。',
+      planningProcess: '按当前工作需要参考已有资料与实际代码，自主选择调研、设计、实现和验证顺序。Feature 表达用户行为或可交付能力；工程底座和质量检查留在项目交付资料。功能设计写目标、行为、规则、失败与验收条件；状态、证据等级与历史执行结果单独记录，不写入设计正文。保留原有文档格式，可扩展或修正设计，不要求补齐固定章节。',
       planningBoundary: detail.project.workflowMode === 'AUTO'
         ? 'AUTO：AI 可创建 Revision、Capability、Task 并直接执行；AI 报告 PASS 只结束实施任务，不构成当前核验或负责人验收。不得假设存在数据库、HTTP API、UI、Frontend 或 Backend。'
         : 'CONTROLLED：保留 Design Review、Approved Baseline、Authorization 和人工确认。不得假设存在数据库、HTTP API、UI、Frontend 或 Backend。',
     };
+  }
+
+  private featureEvidence(detail: ProjectDetail) {
+    return detail.features.map((feature) => {
+      const design = detail.specifications.find((item) => item.featureId === feature.id && item.capabilityId === null);
+      const latest = detail.runs.filter((run) => run.featureId === feature.id && run.verificationSummary)
+        .sort((a, b) => Date.parse(b.submittedAt ?? b.startedAt) - Date.parse(a.submittedAt ?? a.startedAt))[0];
+      const capabilities = detail.capabilities.filter((item) => item.featureId === feature.id);
+      const passed = capabilities.filter((capability) => {
+        const taskIds = new Set(detail.tasks.filter((task) => task.capabilityId === capability.id).map((task) => task.id));
+        const last = detail.runs.filter((run) => taskIds.has(run.taskId) && run.verificationSummary)
+          .sort((a, b) => Date.parse(b.submittedAt ?? b.startedAt) - Date.parse(a.submittedAt ?? a.startedAt))[0];
+        return last?.status === 'SUBMITTED' && last.designSnapshotStatus === 'CURRENT'
+          && last.verificationSummary?.origin === 'CI' && last.verificationSummary.evidenceStatus === 'VERIFIED'
+          && last.verificationSummary.reportedStatus === 'PASS';
+      }).length;
+      return {
+        featureId: feature.id, status: feature.status,
+        design: design ? { specificationId: design.id, latestRevisionId: design.latestRevisionId,
+          approvedRevisionId: design.approvedRevisionId } : null,
+        capabilityDesigns: detail.specifications.filter((item) => item.featureId === feature.id && item.capabilityId)
+          .map((item) => ({ capabilityId: item.capabilityId, specificationId: item.id,
+            latestRevisionId: item.latestRevisionId, approvedRevisionId: item.approvedRevisionId })),
+        latestReport: latest ? { runId: latest.id, submittedAt: latest.submittedAt,
+          reportedStatus: latest.verificationSummary!.reportedStatus,
+          origin: latest.verificationSummary!.origin, evidenceStatus: latest.verificationSummary!.evidenceStatus,
+          designSnapshotStatus: latest.designSnapshotStatus,
+          designSnapshotWarnings: latest.designSnapshotWarnings } : null,
+        verificationCoverage: { passed, total: capabilities.length },
+        currentVerification: capabilities.length > 0 && passed === capabilities.length ? 'PASS' : 'UNVERIFIED',
+        acceptance: feature.status === 'ACCEPTED' ? 'OWNER_MARKED_ACCEPTED' : 'NOT_RECORDED',
+      };
+    });
   }
 
   getFeatureContext(featureId: string) {
@@ -1886,8 +1944,8 @@ export class WorkspaceService {
         const capability = this.repository.findCapability(projectId, specification.capabilityId);
         if (capability && capability.status === 'DRAFT') {
           this.repository.updateCapability(projectId, capability.id, { status: 'DESIGNED', updatedAt: new Date() });
-          this.syncFeatureStatus(capability.featureId);
         }
+        if (capability) this.syncFeatureStatus(capability.featureId);
       }
       return revisionView(revision);
     });
@@ -1967,6 +2025,7 @@ export class WorkspaceService {
       if (decision === 'APPROVED' && this.repository.pointToApprovedRevision(specification.id, review.revisionId) !== 1) {
         throw new ApiError(409, 'BASELINE_UPDATE_CONFLICT', '正式设计基线更新失败');
       }
+      if (specification.capabilityId) this.syncFeatureStatus(specification.featureId!);
       return reviewView({ ...review, status: decision, decidedAt, decisionComment });
     });
   }
@@ -2011,7 +2070,13 @@ export class WorkspaceService {
       if (featureCapabilities.every((item) => item.status === 'DONE')) status = 'VERIFYING';
       else if (featureCapabilities.some((item) => item.status === 'TESTING')) status = 'VERIFYING';
       else if (featureCapabilities.some((item) => ['IMPLEMENTING', 'BLOCKED', 'DONE'].includes(item.status))) status = 'IMPLEMENTING';
-      else if (featureCapabilities.every((item) => item.status === 'DESIGNED')) status = 'READY';
+      else if (featureCapabilities.every((item) => item.status === 'DESIGNED')) {
+        const approved = featureCapabilities.every((item) => {
+          const design = this.repository.findCapabilitySpecification(feature.projectId, item.id);
+          return Boolean(design?.latestRevisionId && design.approvedRevisionId === design.latestRevisionId);
+        });
+        status = approved ? 'READY' : 'DESIGNING';
+      }
       else status = 'DESIGNING';
     }
     if (feature.status !== status) this.repository.updateFeature(feature.projectId, featureId, { status, updatedAt: new Date() });
