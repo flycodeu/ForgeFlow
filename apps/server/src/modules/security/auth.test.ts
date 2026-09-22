@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 import Database from 'better-sqlite3';
 import type { AiTokenSummary, CreatedAiToken, Project, SpecificationRevision, SpecificationSummary } from '@forgeflow/contracts';
@@ -136,4 +137,39 @@ test('local Web can manage AI Tokens without initializing or logging in as Owner
   assert.equal(created.statusCode, 201);
   assert.match(created.json<CreatedAiToken>().token, /^ffai_/);
   assert.equal((await app.inject({ method: 'GET', url: '/api/ai-tokens' })).json<AiTokenSummary[]>().length, 1);
+});
+
+test('local import preserves Claude Desktop configuration and refuses an existing connection', async (t) => {
+  if (process.platform !== 'win32') return;
+  const directory = mkdtempSync(join(tmpdir(), 'forgeflow-client-import-'));
+  const previousAppData = process.env.APPDATA;
+  process.env.APPDATA = directory;
+  const app = createApp(join(directory, 'forgeflow.db'));
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  t.after(async () => {
+    await app.close();
+    if (previousAppData === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = previousAppData;
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const configPath = join(directory, 'Claude', 'claude_desktop_config.json');
+  mkdirSync(join(directory, 'Claude'));
+  writeFileSync(configPath, JSON.stringify({ preferences: { theme: 'dark' }, mcpServers: { existing: { command: 'sample' } } }));
+  const created = (await app.inject({ method: 'POST', url: '/api/ai-tokens', payload: {
+    name: 'Local client', scopes: ['project:read'],
+  } })).json<CreatedAiToken>();
+  const request = () => app.inject({ method: 'POST', url: '/api/ai-tokens/import-local',
+    headers: { host: 'localhost:54321' }, payload: { client: 'claude-desktop', token: created.token } });
+  const first = await request();
+  assert.equal(first.statusCode, 200, first.body);
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as any;
+  assert.equal(config.preferences.theme, 'dark');
+  assert.equal(config.mcpServers.existing.command, 'sample');
+  assert.equal(config.mcpServers.forgeflow.url, `http://127.0.0.1:${(app.server.address() as AddressInfo).port}/mcp`);
+  assert.equal(config.mcpServers.forgeflow.headers.Authorization, `Bearer ${created.token}`);
+  assert.ok(existsSync(join(directory, 'Claude')));
+  assert.equal(readdirSync(join(directory, 'Claude')).filter((name) => name.startsWith('claude_desktop_config.json.bak-')).length, 1);
+  assert.equal((await request()).statusCode, 409);
+  assert.equal((await app.inject({ method: 'DELETE', url: `/api/ai-tokens/${created.id}` })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/ai-tokens' })).json<AiTokenSummary[]>().length, 0);
 });

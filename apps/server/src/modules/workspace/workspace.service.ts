@@ -786,7 +786,7 @@ export class WorkspaceService {
         category: task.category, area: task.area,
         status: task.status, objective: task.objective, sortOrder: task.sortOrder,
       })),
-      planningProcess: '先核对当前需求、源码和来源版本，按用户任务拆成可独立理解的操作。Feature 只写范围、操作入口和共性边界；每项操作分别写输入字段与约束、输出和状态、处理与失败、接口与数据读写、可执行验收点。只提炼与本项目当前决策有关的结论，注明事实、目标和未决；不要复制原文、DDL、哈希或无关工程状态到设计正文。未确认的接口、表字段和参数明确标为待定，不补造。历史及候选资料仅在需要时按 otherSpecificationIndex 单独读取。无变化或模板占位内容不应提交新版本。',
+      planningProcess: '先核对当前需求、源码和来源版本。项目背景写产品问题；需求按使用者任务、输入、结果和待确认验收条件写；调研比较外部类似产品或方案的优缺点、适用边界与本项目取舍，引用来源，不能当作本项目已实现功能；架构区分现有与目标组件、调用链、数据流和失败边界；技术选型列实际技术/依赖、用途、候选与采用条件，不以资料维护源冒充技术。按用户任务拆成可独立理解的操作：Feature 只写范围、操作入口和共性边界；每项操作分别写输入字段与约束、输出和状态、处理与失败、接口与数据读写、可执行验收点。只提炼与当前决策有关的结论，注明事实、目标和未决；不要复制原文、DDL、哈希或无关工程状态到设计正文。未确认的接口、表字段和参数明确标为待定，不补造。历史及候选资料仅在需要时按 otherSpecificationIndex 单独读取。无变化或模板占位内容不应提交新版本。',
       planningBoundary: detail.project.workflowMode === 'AUTO'
         ? 'AUTO：AI 可创建 Revision、Capability、Task 并直接执行；AI 报告 PASS 只结束实施任务，不构成当前核验或负责人验收。不得假设存在数据库、HTTP API、UI、Frontend 或 Backend。'
         : 'CONTROLLED：保留 Design Review、Approved Baseline、Authorization 和人工确认。不得假设存在数据库、HTTP API、UI、Frontend 或 Backend。',

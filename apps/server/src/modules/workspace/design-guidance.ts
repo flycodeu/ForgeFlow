@@ -12,7 +12,7 @@ type GuidanceInput = {
 type TaskSeed = { name: string; category: TaskCategory; area: string; objective: string };
 
 const CORE_SECTIONS = [
-  '目标与操作入口', '共同边界', '依赖与影响', '未决与依据',
+  '范围与操作入口', '共同边界', '依赖与影响', '未决与依据',
 ];
 
 const PROFILES: Record<ProjectProfile, { label: string; keywords: RegExp; sections: string[]; tasks: TaskSeed[] }> = {

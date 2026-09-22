@@ -64,5 +64,5 @@ test('MCP archive accepts original documents and free work records without task 
   assert.deepEqual(context.tasks, []);
   assert.deepEqual(context.runs, []);
   assert.match(result<{ planningProcess: string }>(await call('get_project_planning_context', { projectId: project.id },
-    (await app.inject({ method: 'POST', url: '/api/ai-tokens', payload: { name: 'context-reader', scopes: ['project:read', 'spec:read', 'task:read'] } })).json<CreatedAiToken>().token)).planningProcess, /不要求补齐固定章节/);
+    (await app.inject({ method: 'POST', url: '/api/ai-tokens', payload: { name: 'context-reader', scopes: ['project:read', 'spec:read', 'task:read'] } })).json<CreatedAiToken>().token)).planningProcess, /调研比较外部类似产品或方案的优缺点/);
 });

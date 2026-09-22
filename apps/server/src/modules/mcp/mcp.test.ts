@@ -102,8 +102,8 @@ test('MCP exposes scoped context tools and reuses the authorized Run state machi
   const guidance = resultText<{ coreSections: string[]; markdownTemplate: string; guardrails: string[] }>(
     await call(token.token, 'get_feature_design_guidance', { featureId: feature.id }),
   );
-  assert.ok(guidance.coreSections.includes('2. 设计依据与已确认决策'));
-  assert.match(guidance.markdownTemplate, /## CAP-01 核心能力/);
+  assert.ok(guidance.coreSections.includes('范围与操作入口'));
+  assert.match(guidance.markdownTemplate, /## 范围与操作入口/);
   assert.ok(guidance.guardrails.some((item) => item.includes('不得虚构')));
   const planner = await rest<CreatedAiToken>('POST', '/api/ai-tokens', {
     name: 'design-planner', scopes: ['project:read', 'spec:read', 'task:read', 'planning:write'],

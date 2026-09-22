@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { AddressInfo } from 'node:net';
 import type { AiScope } from '@forgeflow/contracts';
 import { ApiError } from '../../shared/api-error.js';
 import { AuthService, SESSION_COOKIE, SESSION_MAX_AGE } from './auth.service.js';
+import { importLocalClient } from './local-client-import.js';
 
 function bodyObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ApiError(400, 'INVALID_INPUT', '请求内容必须是 JSON 对象');
@@ -57,6 +59,20 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService) {
       throw new ApiError(400, 'INVALID_INPUT', 'scopes 无效');
     }
     return reply.code(201).send(auth.createToken(name, body.scopes as AiScope[]));
+  });
+  app.post('/api/ai-tokens/import-local', async (request) => {
+    await auth.require(request, 'owner', true);
+    const body = bodyObject(request.body);
+    if (body.client !== 'codex' && body.client !== 'claude-desktop') {
+      throw new ApiError(400, 'INVALID_INPUT', '仅支持 Codex 或 Claude Desktop 本机导入');
+    }
+    const port = request.raw.socket.localPort ?? (app.server.address() as AddressInfo | null)?.port;
+    if (!port || !Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new ApiError(503, 'LOCAL_CLIENT_UNAVAILABLE', '无法确定本机服务监听地址');
+    }
+    const secret = requiredString(body, 'token', 80);
+    auth.requireActiveTokenSecret(secret);
+    return importLocalClient(body.client, secret, `http://127.0.0.1:${port}/mcp`);
   });
   app.post<{ Params: { tokenId: string } }>('/api/ai-tokens/:tokenId/revoke', async (request) => {
     await auth.require(request, 'owner', true);

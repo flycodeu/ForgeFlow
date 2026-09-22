@@ -119,6 +119,12 @@ export class AuthService {
 
   listTokens() { return this.repository.listTokens().map(tokenView); }
 
+  requireActiveTokenSecret(secret: string) {
+    if (!/^ffai_[A-Za-z0-9_-]+$/.test(secret)) throw new ApiError(400, 'INVALID_INPUT', '连接凭证无效');
+    const token = this.repository.findTokenByHash(hash(secret));
+    if (!token || token.revokedAt) throw new ApiError(401, 'UNAUTHENTICATED', '连接凭证无效或已撤销');
+  }
+
   createToken(name: string, scopes: AiScope[]): CreatedAiToken {
     if (!scopes.length || new Set(scopes).size !== scopes.length || scopes.some((scope) => !SCOPES.includes(scope))) {
       throw new ApiError(400, 'INVALID_INPUT', '请选择有效且不重复的 Scope');

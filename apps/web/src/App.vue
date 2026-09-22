@@ -1,4 +1,4 @@
-<<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import type {
   AiRun, AiScope, AiTokenSummary, Capability, CreatedAiToken, DesignReview, Feature, FeatureStatus, HealthResponse, Module, Project,
@@ -8,7 +8,6 @@ import type {
 import CapabilityProgress from './components/CapabilityProgress.vue';
 import EngineeringWorkbench from './components/EngineeringWorkbench.vue';
 import ProjectLifecycleBar from './components/ProjectLifecycleBar.vue';
-import ResearchWorkspace from './components/ResearchWorkspace.vue';
 import SourceIntegration from './components/SourceIntegration.vue';
 import TestingWorkspace from './components/TestingWorkspace.vue';
 import ProjectArchive from './components/ProjectArchive.vue';
@@ -129,9 +128,11 @@ async function copySnippet(key: string, text: string) {
     textarea.style.position = 'fixed';
     textarea.style.opacity = '0';
     document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand('copy');
-    document.body.removeChild(textarea);
+    let copied = false;
+    try { textarea.select(); copied = document.execCommand('copy'); }
+    catch { copied = false; }
+    finally { textarea.remove(); }
+    if (!copied) { error.value = '复制失败，请手动选中命令复制'; return; }
   }
   copiedSnippets.value[key] = true;
   setTimeout(() => {
@@ -288,13 +289,7 @@ const technologySummary = computed(() => {
     break;
   }
   if (rows.length) return rows;
-  let current = ''; const summaries: typeof rows = [];
-  for (const line of lines) {
-    const heading = /^#{2,4}\s+(.+)$/.exec(line.trim());
-    if (heading) { current = heading[1]!.trim(); continue; }
-    if (current && line.trim() && summaries.length < 12) { summaries.push({ category: current, choice: line.trim().replace(/^[-*]\s+/, ''), purpose: '', reason: '', alternatives: '', status: '' }); current = ''; }
-  }
-  return summaries;
+  return [];
 });
 
 function kindName(kind: string) { return kindNames[kind] ?? kind; }
@@ -517,6 +512,7 @@ function sourceName(source: string) {
   if (source === 'owner:1' || source === 'local-web') return '本地工作台';
   if (source === 'api') return 'API';
   if (source.startsWith('ai-token:')) return 'AI Token';
+  if (source.startsWith('local:')) return `本机资料 · ${source.slice(6).split('@sha256:')[0]?.split('/').at(-1) ?? '本地文件'}`;
   return source;
 }
 function escapeHtml(value: string) {
@@ -867,6 +863,7 @@ async function createRevision() {
 const showCreateTokenModal = ref(false);
 const createdTokenResult = ref<CreatedAiToken | null>(null);
 const connectionDialogMode = ref<'create' | 'rotate'>('create');
+const localImportResult = ref('');
 
 const codexRemoveCommand = `# 卸载 Codex MCP
 codex mcp remove forgeflow`;
@@ -874,13 +871,13 @@ const claudeCodeRemoveCommand = `# 卸载 Claude Code MCP
 claude mcp remove forgeflow`;
 
 function createdCodexCommand(token: string) {
-  return `# 1. 设置环境变量（永久生效）
-[Environment]::SetEnvironmentVariable("FORGEFLOW_MCP_TOKEN", "${token}", "User")
-
-# 2. 接入 Codex MCP
-codex mcp add forgeflow \`
+  return `codex mcp add forgeflow \`
   --url "${mcpUrl}" \`
   --bearer-token-env-var FORGEFLOW_MCP_TOKEN`;
+}
+
+function createdCodexEnvCommand(token: string) {
+  return `[Environment]::SetEnvironmentVariable("FORGEFLOW_MCP_TOKEN", "${token}", "User")`;
 }
 
 function createdCodexToml(token: string) {
@@ -888,8 +885,7 @@ function createdCodexToml(token: string) {
 }
 
 function createdClaudeCodeCommand(token: string) {
-  return `# 接入 Claude Code MCP
-claude mcp add \`
+  return `claude mcp add \`
   --transport http \`
   forgeflow "${mcpUrl}" \`
   --header "Authorization: Bearer ${token}"`;
@@ -908,35 +904,41 @@ function createdClaudeDesktopJson(token: string) {
   }, null, 2);
 }
 
-function getTabTitle(tab: string): string {
-  switch (tab) {
-    case 'codex': return 'Codex 命令行接入 (PowerShell 多行格式)';
-    case 'codex-toml': return 'Codex TOML 配置';
-    case 'claude': return 'Claude Code 命令行接入 (多行参数)';
-    case 'desktop': return 'Claude Desktop 配置';
-    case 'uninstall': return '卸载 MCP 命令';
-    default: return '';
-  }
+function getModalSnippets(tab: string, token: string): { id: string; title: string; code: string }[] {
+  if (tab === 'codex') return [
+    { id: 'codex-env', title: '1. 保存连接凭证（PowerShell）', code: createdCodexEnvCommand(token) },
+    { id: 'codex-add', title: '2. 添加 Codex 连接（PowerShell）', code: createdCodexCommand(token) },
+  ];
+  if (tab === 'codex-toml') return [{ id: 'codex-toml', title: 'Codex TOML 配置', code: createdCodexToml(token) }];
+  if (tab === 'claude') return [{ id: 'claude-code', title: '添加 Claude Code 连接（PowerShell）', code: createdClaudeCodeCommand(token) }];
+  if (tab === 'desktop') return [{ id: 'claude-desktop', title: 'Claude Desktop 配置', code: createdClaudeDesktopJson(token) }];
+  if (tab === 'uninstall') return [
+    { id: 'codex-remove', title: '移除 Codex 连接', code: codexRemoveCommand },
+    { id: 'claude-remove', title: '移除 Claude Code 连接', code: claudeCodeRemoveCommand },
+  ];
+  return [];
 }
 
-function getModalSnippetCode(tab: string, token: string): string {
-  if (tab === 'codex') return createdCodexCommand(token);
-  if (tab === 'codex-toml') return createdCodexToml(token);
-  if (tab === 'claude') return createdClaudeCodeCommand(token);
-  if (tab === 'desktop') return createdClaudeDesktopJson(token);
-  if (tab === 'uninstall') return `${codexRemoveCommand}\n\n${claudeCodeRemoveCommand}`;
-  return '';
-}
-
-async function copyModalTabCode(token: string) {
-  const code = getModalSnippetCode(tokenModalTab.value, token);
-  await copySnippet('modal-tab-' + tokenModalTab.value, code);
+async function importLocalClient(client: 'codex' | 'claude-desktop') {
+  if (!createdTokenResult.value) return;
+  clearMessage(); localImportResult.value = ''; busy.value = true;
+  try {
+    const result = await api<{ client: string; configPath: string }>('/api/ai-tokens/import-local', {
+      method: 'POST',
+      body: JSON.stringify({ client, token: createdTokenResult.value.token }),
+    });
+    notice.value = `已写入本机 ${result.client} 配置：${result.configPath}。重新启动客户端后生效。`;
+    localImportResult.value = notice.value;
+  } catch (cause) { showError(cause); localImportResult.value = error.value; }
+  finally { busy.value = false; }
 }
 
 function openCreateTokenModal() {
   tokenName.value = '';
   tokenScopes.value = scopeOptions.map((item) => item.value);
   createdTokenResult.value = null;
+  localImportResult.value = '';
+  copiedSnippets.value = {};
   connectionDialogMode.value = 'create';
   tokenModalTab.value = 'codex';
   showCreateTokenModal.value = true;
@@ -945,6 +947,8 @@ function openCreateTokenModal() {
 function closeCreateTokenModal() {
   showCreateTokenModal.value = false;
   createdTokenResult.value = null;
+  localImportResult.value = '';
+  copiedSnippets.value = {};
 }
 
 async function openTokens() {
@@ -984,6 +988,7 @@ function rotateToken(token: AiTokenSummary) {
         tokens.value = await api<AiTokenSummary[]>('/api/ai-tokens');
         createdTokenResult.value = created;
         connectionDialogMode.value = 'rotate';
+        localImportResult.value = '';
         tokenModalTab.value = 'codex';
         showCreateTokenModal.value = true;
         notice.value = '旧凭证已撤销，请执行新的接入命令';
@@ -1067,6 +1072,23 @@ function revokeToken(id: string) {
       } finally {
         busy.value = false;
       }
+    },
+  });
+}
+
+function deleteToken(token: AiTokenSummary) {
+  openConfirm({
+    title: '删除连接记录',
+    message: `确定删除「${token.name}」吗？凭证会立即失效，连接记录无法恢复；客户端本机的配置需自行移除。`,
+    confirmText: '删除连接', isDanger: true,
+    onConfirm: async () => {
+      clearMessage(); busy.value = true;
+      try {
+        await api(`/api/ai-tokens/${token.id}`, { method: 'DELETE' });
+        tokens.value = await api<AiTokenSummary[]>('/api/ai-tokens');
+        notice.value = `连接「${token.name}」已删除`;
+      } catch (cause) { showError(cause); }
+      finally { busy.value = false; }
     },
   });
 }
@@ -1232,6 +1254,7 @@ onMounted(async () => {
                       >
                         撤销
                       </button>
+                      <button class="secondary-button" type="button" :disabled="busy" @click="deleteToken(token)">删除</button>
                     </div>
                   </div>
                   <div class="token-card-scopes">
@@ -1363,7 +1386,6 @@ onMounted(async () => {
             </div>
           </template>
 
-          <ResearchWorkspace v-if="workspacePage === 'research'" :specification="currentSpecification" :revision="selectedRevision" @create="currentSpecification ? startRevision() : prepareNewMaterial('research')" />
           <ProjectMaterials v-if="workspacePage === 'materials'" :project-id="currentProject.id" :specifications="projectDetail.specifications"
             :features="projectDetail.features" :capabilities="projectDetail.capabilities" @open-specification="openOtherMaterial"
             @open-document="openArchiveDocument" @open-capability="openFeature" />
@@ -1371,7 +1393,7 @@ onMounted(async () => {
           <SourceIntegration v-if="workspacePage === 'sources'" :project-id="currentProject.id" :sources="projectDetail.sources" :analyses="projectDetail.sourceAnalyses"
             @refresh="refreshCurrentProject" @notice="notice = $event; error = ''" @error="error = $event; notice = ''" />
 
-          <template v-if="isDocumentPage && workspacePage !== 'research'">
+          <template v-if="isDocumentPage">
             <div class="compact-page-heading document-page-heading">
               <div class="heading-title-group">
                 <h1>{{ activeDocumentPage === 'document' && currentSpecification ? currentSpecification.title : activeDocumentConfig.title }}</h1>
@@ -1805,19 +1827,27 @@ onMounted(async () => {
             </button>
           </div>
 
-          <div class="clean-code-block-wrap">
+          <div v-for="snippet in getModalSnippets(tokenModalTab, createdTokenResult.token)" :key="snippet.id" class="clean-code-block-wrap">
             <div class="code-block-header">
-              <span class="code-block-title">{{ getTabTitle(tokenModalTab) }}</span>
+              <span class="code-block-title">{{ snippet.title }}</span>
               <button
                 type="button"
                 class="secondary-button copy-btn"
-                @click="copyModalTabCode(createdTokenResult.token)"
+                @click.stop="copySnippet(snippet.id, snippet.code)"
               >
-                {{ copiedSnippets['modal-tab-' + tokenModalTab] ? '已复制' : '复制' }}
+                {{ copiedSnippets[snippet.id] ? '已复制' : '复制' }}
               </button>
             </div>
-            <pre class="clean-code-pre"><code>{{ getModalSnippetCode(tokenModalTab, createdTokenResult.token) }}</code></pre>
+            <pre class="clean-code-pre"><code>{{ snippet.code }}</code></pre>
           </div>
+          <p v-if="tokenModalTab === 'uninstall'" class="connection-security-note">Claude Desktop 请在本机配置中移除 mcpServers.forgeflow。移除客户端配置不会撤销 ForgeFlow 中的凭证；如需停用，请在连接列表撤销或删除。</p>
+
+          <div class="dialog-actions" v-if="tokenModalTab === 'codex' || tokenModalTab === 'desktop'">
+            <button class="secondary-button" type="button" :disabled="busy" @click="importLocalClient(tokenModalTab === 'codex' ? 'codex' : 'claude-desktop')">
+              {{ busy ? '正在导入…' : `导入本机 ${tokenModalTab === 'codex' ? 'Codex' : 'Claude Desktop'}` }}
+            </button>
+          </div>
+          <p v-if="localImportResult" role="status" class="connection-security-note">{{ localImportResult }}</p>
 
           <div class="dialog-actions">
             <button class="primary-button" type="button" @click="closeCreateTokenModal">关闭</button>
