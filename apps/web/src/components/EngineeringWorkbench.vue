@@ -5,6 +5,7 @@ import type {
 } from '@forgeflow/contracts';
 import { api as getJson } from '../api-client';
 import ArchiveMarkdown from './ArchiveMarkdown.vue';
+import CapabilityDesignView from './CapabilityDesignView.vue';
 
 type NavFolder = { kind: string; label: string };
 type NavGroup = { key: string; label: string; folders: NavFolder[] };
@@ -306,7 +307,7 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
               </button>
               <div v-if="!collapsedNavBranches.has('capabilities')" class="tree-leaves">
                 <button v-for="item in capabilities" :key="item.id" type="button" :class="['tree-node tree-leaf capability-leaf', { active: selectedType === 'capability' && selectedId === item.id }]" @click="selectItem('capability', item.id)">
-                  <strong :title="item.name">{{ item.name }}</strong><span :data-status="item.status">{{ capabilityLabel(item.status) }}</span>
+                  <strong :title="`${item.code} ${item.name}`"><code>{{ item.code }}</code> {{ item.name }}</strong><span :data-status="item.status">{{ capabilityLabel(item.status) }}</span>
                 </button>
               </div>
             </section>
@@ -351,16 +352,14 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
             <header><h3>功能明细</h3></header>
             <div class="catalog-table">
               <button v-for="item in capabilities" :key="item.id" type="button" @click="selectItem('capability', item.id)">
-                <strong>{{ item.name }}</strong><span>{{ capabilityLabel(item.status) }} →</span>
+                <strong><code>{{ item.code }}</code> {{ item.name }}</strong><span>{{ capabilityLabel(item.status) }} →</span>
               </button>
             </div>
           </section>
-          <section class="design-card full-design-card">
-            <header><h3>设计内容</h3></header>
-            <ArchiveMarkdown v-if="featureDesign?.latestRevision?.content" class="design-document" :content="featureDesign.latestRevision.content" />
-            <details v-if="featureDesign?.latestRevision?.content" class="design-source"><summary>查看原文</summary><pre>{{ featureDesign.latestRevision.content }}</pre></details>
-            <p v-else class="empty-copy">暂无设计正文。</p>
-          </section>
+          <details v-if="featureDesign?.latestRevision?.content" class="design-card feature-design-accordion">
+            <summary>功能范围与共同边界 <span>REV {{ featureDesign.latestRevision.revisionNo }}</span></summary>
+            <ArchiveMarkdown class="design-document" :content="featureDesign.latestRevision.content" />
+          </details>
         </template>
 
         <template v-else-if="selectedAsset">
@@ -386,19 +385,14 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
 
         <template v-else-if="selectedCapability">
           <div class="detail-heading capability-heading">
-            <div><h2>{{ selectedCapability.name }}</h2></div>
+            <div><span class="detail-type">{{ selectedCapability.code }}</span><h2>{{ selectedCapability.name }}</h2></div>
             <div class="capability-state" :data-status="selectedCapability.status"><span>当前状态</span><strong>{{ capabilityLabel(selectedCapability.status) }}</strong></div>
           </div>
-          <section class="capability-overview-grid">
-            <div><span>设计正文</span><strong>{{ capabilityDetail?.design?.latestRevision ? '已记录' : '暂无' }}</strong></div>
-            <div><span>关联工程设计</span><strong>{{ associatedAssets.length }} 项</strong></div>
-            <div><span>实施任务</span><strong>{{ capabilityTasks.length }} 项</strong></div>
-            <div><span>当前 CI 核验</span><strong>{{ currentCheckCount(selectedCapability.id) }} / {{ capabilityTasks.length }} 项任务</strong></div>
-          </section>
-          <section v-if="capabilityDetail?.design?.latestRevision?.content" class="design-card capability-design"><header><h3>设计内容</h3></header><ArchiveMarkdown class="design-document" :content="capabilityDetail.design.latestRevision.content" /><details class="design-source"><summary>查看原文</summary><pre>{{ capabilityDetail.design.latestRevision.content }}</pre></details></section>
-          <section class="design-card"><header><h3>关联设计</h3></header><div v-if="associatedAssets.length" class="asset-link-grid"><button v-for="asset in associatedAssets" :key="asset.id" type="button" @click="selectItem('asset', asset.id)"><span>{{ assetKindLabel(asset.kind) }}</span><strong>{{ asset.name }}</strong></button></div><p v-else class="empty-copy">暂未关联工程设计。</p></section>
-          <section class="design-card implementation-card"><header><h3>实现与验证</h3></header><div v-if="capabilityTasks.length" class="implementation-list"><article v-for="task in capabilityTasks" :key="task.id"><div><code>{{ task.code }}</code><strong>{{ task.name }}</strong><span :data-task-status="task.status">{{ taskStatus(task) }}</span></div><p>{{ task.objective }}</p><div v-for="run in capabilityRuns.filter(item => item.taskId === task.id)" :key="run.id" class="run-evidence"><span>执行记录 · {{ run.actorName }}</span><strong>{{ verificationLabel(run) }}</strong><code>{{ run.resultCommit ?? '尚无提交' }}</code><small>{{ run.changedFiles.map(runFileLabel).join(' · ') || '尚无文件记录' }}</small><p>{{ run.verificationSummary?.summary ?? run.summary }}</p></div></article></div><p v-else class="empty-copy">暂无实施任务。</p></section>
-          <section class="design-card trace-card"><header><h3>来源与追踪</h3><span>{{ traceLinks.length }} 条关系</span></header><div v-if="traceLinks.length" class="trace-list"><div v-for="link in traceLinks" :key="link.id"><strong>{{ traceLeft(link) }}</strong><span>{{ relationLabel(link.relation) }}</span><strong>{{ traceRight(link) }}</strong></div></div><p v-else class="empty-copy">尚无显式追踪关系。</p></section>
+          <section v-if="capabilityDetail?.design?.latestRevision?.content" class="design-card capability-design"><header><h3>操作设计</h3><span>REV {{ capabilityDetail.design.latestRevision.revisionNo }}</span></header><CapabilityDesignView :content="capabilityDetail.design.latestRevision.content" /></section>
+          <div class="capability-progress-line"><span>关联设计 {{ associatedAssets.length }}</span><span>实施任务 {{ capabilityTasks.length }}</span><span>当前 CI 核验 {{ currentCheckCount(selectedCapability.id) }} / {{ capabilityTasks.length }}</span></div>
+          <section v-if="associatedAssets.length" class="design-card"><header><h3>关联设计</h3></header><div class="asset-link-grid"><button v-for="asset in associatedAssets" :key="asset.id" type="button" @click="selectItem('asset', asset.id)"><span>{{ assetKindLabel(asset.kind) }}</span><strong>{{ asset.name }}</strong></button></div></section>
+          <section v-if="capabilityTasks.length" class="design-card implementation-card"><header><h3>实现与验证</h3></header><div class="implementation-list"><article v-for="task in capabilityTasks" :key="task.id"><div><code>{{ task.code }}</code><strong>{{ task.name }}</strong><span :data-task-status="task.status">{{ taskStatus(task) }}</span></div><p>{{ task.objective }}</p><div v-for="run in capabilityRuns.filter(item => item.taskId === task.id)" :key="run.id" class="run-evidence"><span>执行记录 · {{ run.actorName }}</span><strong>{{ verificationLabel(run) }}</strong><code>{{ run.resultCommit ?? '尚无提交' }}</code><small>{{ run.changedFiles.map(runFileLabel).join(' · ') || '尚无文件记录' }}</small><p>{{ run.verificationSummary?.summary ?? run.summary }}</p></div></article></div></section>
+          <details v-if="traceLinks.length" class="design-card trace-card"><summary>来源与追踪 <span>{{ traceLinks.length }} 条关系</span></summary><div class="trace-list"><div v-for="link in traceLinks" :key="link.id"><strong>{{ traceLeft(link) }}</strong><span>{{ relationLabel(link.relation) }}</span><strong>{{ traceRight(link) }}</strong></div></div></details>
         </template>
 
         <template v-else-if="selectedType === 'plan'">
@@ -473,6 +467,7 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
 .tree-leaf.active { background: var(--primary-subtle); box-shadow: inset 2px 0 var(--primary); }
 .capability-leaf { grid-template-columns: minmax(0, 1fr) auto; }
 .capability-leaf code { color: var(--muted); font: 700 10.5px var(--mono); }
+.capability-leaf strong code { margin-right: 4px; }
 .capability-leaf strong, .asset-leaf strong, .simple-leaf strong { overflow: hidden; color: var(--ink); font-size: 12.5px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .capability-leaf > span { color: var(--muted); font-size: 10px; }
 .capability-leaf > span[data-status="DONE"] { color: #15803d; }
@@ -542,6 +537,13 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
 .capability-state span { color: var(--muted); font-size: 11.5px; }
 .capability-state strong { font-size: 14px; font-weight: 600; color: var(--ink); }
 .design-card { min-width: 0; max-width: 1200px; margin: 0 auto 20px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); overflow: hidden; }
+.feature-design-accordion > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 46px; padding: 10px 20px; color: var(--ink); font-size: 14px; font-weight: 600; cursor: pointer; }
+.feature-design-accordion > summary span { color: var(--muted); font-size: 12px; font-weight: 400; }
+.feature-design-accordion[open] > summary { border-bottom: 1px solid var(--line); }
+.trace-card > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 46px; padding: 10px 20px; color: var(--ink); font-size: 14px; font-weight: 600; cursor: pointer; }
+.trace-card > summary span { color: var(--muted); font-size: 12px; font-weight: 400; }
+.trace-card[open] > summary { border-bottom: 1px solid var(--line); }
+.capability-progress-line { display: flex; flex-wrap: wrap; gap: 8px 18px; max-width: 1200px; margin: -4px auto 18px; color: var(--muted); font-size: 12px; }
 .design-card > header { display: flex; min-height: 46px; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--surface-subtle); }
 .design-card > header h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink); }
 .design-card > header span { color: var(--muted); font-size: 12px; }
