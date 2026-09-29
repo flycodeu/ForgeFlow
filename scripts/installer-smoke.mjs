@@ -22,7 +22,7 @@ const installedExeHash = createHash('sha256').update(await readFile(join(target,
 const installedManifest = JSON.parse(await readFile(join(target, 'forgeflow-install-manifest.json'), 'utf8'));
 assert.equal(installedExeHash, installedManifest.files.find(file => file.path === 'ForgeFlow.exe')?.sha256);
 assert.equal((await readFile(join(target, 'forgeflow-install-location.txt'), 'utf16le')).replace(/^\uFEFF/, ''), target);
-assert.equal(await run(installer, ['/S', `/D=${target}`]), 2, 'Non-empty install targets must be rejected');
+assert.equal(await run(installer, ['/S', `/D=${target}`]), 0, 'Existing ForgeFlow installation must support in-place upgrade');
 await writeFile(join(target, 'user-notes.txt'), 'Keep user-created files');
 await writeFile(join(target, 'README.md'), 'Keep changed application files');
 const hasRuntime = (await readFile(join(target, 'runtime/node.exe'))).subarray(0, 2).toString() === 'MZ';
@@ -59,6 +59,6 @@ while (true) {
 await assert.rejects(access(join(target, 'ForgeFlow.exe')));
 assert.equal(await readFile(join(target, 'user-notes.txt'), 'utf8'), 'Keep user-created files');
 assert.equal(await readFile(join(target, 'README.md'), 'utf8'), 'Keep changed application files');
-const result = { status: 'PASS', base, installer, installedExeHash, completedAt: new Date().toISOString(), checks: ['custom Unicode directory', 'installed executable matches manifest', 'non-empty directory blocked', ...(hasRuntime ? ['running bundled process blocked'] : []), 'locked program blocks all removal', 'normal uninstall removes itself', 'only unchanged application files removed', 'user and modified files retained'] };
+const result = { status: 'PASS', base, installer, installedExeHash, completedAt: new Date().toISOString(), checks: ['custom Unicode directory', 'installed executable matches manifest', 'existing installation upgrades in place', ...(hasRuntime ? ['running bundled process blocked'] : []), 'locked program blocks all removal', 'normal uninstall removes itself', 'only unchanged application files removed', 'user and modified files retained'] };
 await writeFile(join(base, 'result.json'), JSON.stringify(result, null, 2));
 console.log(JSON.stringify(result, null, 2));

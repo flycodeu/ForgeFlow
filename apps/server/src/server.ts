@@ -1,4 +1,5 @@
 import { createApp } from './app.js';
+import { DesktopUpdateService } from './modules/system/updates.js';
 
 const host = '127.0.0.1';
 const port = Number(process.env.PORT ?? 8787);
@@ -14,6 +15,8 @@ try {
     desktopSecret, instanceId: process.env.FORGEFLOW_DESKTOP_INSTANCE, webDist: process.env.FORGEFLOW_WEB_DIST,
     dataPath: process.env.FORGEFLOW_CURRENT_DATA_DIR, storageOverride: process.env.FORGEFLOW_STORAGE_OVERRIDE === 'true',
     openStorage: desktopSecret && process.connected ? () => { process.send?.({ type: 'open-storage' }); } : undefined,
+    updates: desktopSecret && process.connected && process.env.FORGEFLOW_INSTALLED === '1' && process.env.FORGEFLOW_APP_VERSION
+      ? new DesktopUpdateService(process.env.FORGEFLOW_APP_VERSION, (installer) => { process.send?.({ type: 'install-update', installer }); }) : undefined,
   });
   app.addHook('onClose', async () => { if (process.connected) process.disconnect(); });
   await app.listen({ host, port });

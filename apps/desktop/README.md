@@ -4,7 +4,7 @@
 
 ## 安装和数据位置
 
-运行 `ForgeFlow-Setup-0.1.0.exe`，安装向导支持选择程序目录。安装器可识别现有安装路径并就地覆盖程序文件。升级前须从托盘停止后台并退出，确认安装目录没有仍在运行的进程；当前安装保护脚本对残留进程会尝试强制结束，不能作为平滑停止机制。程序目录与数据目录分离，安装/卸载不主动删除外部项目数据和存储配置；升级前仍需备份并核对数据路径。
+运行 `ForgeFlow-Setup-0.2.0.exe`，安装向导支持选择程序目录。安装器可识别现有安装路径并就地覆盖程序文件。安装版可在“系统设置 → 应用版本”检查 GitHub Release、查看真实下载进度并自动安装重启；更新清单使用 Ed25519 签名，安装包下载后校验 SHA256。首次从旧版升级仍需手动安装 0.2.0，后续版本可在应用内更新。程序目录与数据目录分离，安装/卸载不主动删除外部项目数据和存储配置。
 
 首次启动会询问数据位置。请选择专用目录；建议位置为 `%LOCALAPPDATA%\ForgeFlow\data`，也可以选择其他本机磁盘。已有旧版默认目录数据会提供沿用选项，不会自动覆盖。
 
@@ -19,14 +19,20 @@
 全局统一采用单个命令执行桌面端完整打包流水线（自动编译 Web/Server、装配运行时环境、编译 Tauri 桌面程序、生成便携包并编译 Windows 安装程序）：
 
 ```powershell
-# 官方正式版全流程统一打包（自动生成 ForgeFlow-Setup-0.1.0.exe）
+# 官方正式版全流程统一打包（自动生成 ForgeFlow-Setup-0.2.0.exe）
 pnpm desktop:build
+
+# 发布者设置私钥路径后，构建并生成签名更新清单
+$env:FORGEFLOW_RELEASE_PRIVATE_KEY = 'C:\path\outside\repo\signing-key.pem'
+pnpm desktop:release
 
 # 快速调试版打包
 pnpm desktop:build --debug
 ```
 
 构建产物位于 `apps/desktop/dist`。首次编译需要 Rust、MSVC、Cargo 依赖及 Node 24。安装包编译工具使用 NSIS 便携工具（自动位于 `.artifacts/installer-tools/nsis-3.11/makensis.exe`）。运行机器需安装 Microsoft Edge WebView2 Runtime。
+
+GitHub Release 使用 `v<版本>` 标签，并同时上传 `ForgeFlow-Setup-<版本>.exe` 和 `latest.json`。`latest.json` 必须由 `scripts/release-manifest.mjs` 使用与应用内公钥配对的私钥生成；私钥只保存在仓库外并需妥善备份。发布后应用从 GitHub 正式 Release 查询签名清单，不读取预发布版本。安装器为 Windows 当前用户安装，不需要用户打开网页下载安装。
 
 ## 后台与验证边界
 

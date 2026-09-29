@@ -108,6 +108,7 @@ function capabilityLabel(status: Capability['status']) {
   return { DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中', TESTING: '验证中', DONE: '已完成', BLOCKED: '受阻' }[status];
 }
 function featureStatusLabel(status: Feature['status']) {
+  if (status === 'VERIFYING' && !runs.value.length) return '待验证';
   return { DRAFT: '草稿', DESIGNING: '设计中', READY: '待实施', IMPLEMENTING: '实现中', VERIFYING: '验证中', ACCEPTANCE_PENDING: '待验收', ACCEPTED: '已验收', DELIVERED: '交付标记（待核对）' }[status];
 }
 function assetKindLabel(kind: string) {

@@ -1,0 +1,20 @@
+import { createHash, createPrivateKey, sign } from 'node:crypto';
+import { readFile, writeFile, stat } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
+const file = `ForgeFlow-Setup-${version}.exe`;
+const installerPath = join(root, 'apps/desktop/dist', file);
+const keyPath = process.env.FORGEFLOW_RELEASE_PRIVATE_KEY;
+if (!keyPath) throw new Error('Set FORGEFLOW_RELEASE_PRIVATE_KEY to a private key path outside the repository.');
+const key = createPrivateKey(await readFile(keyPath));
+const bytes = await readFile(installerPath);
+const installer = { file, sha256: createHash('sha256').update(bytes).digest('hex'), size: (await stat(installerPath)).size };
+const notes = process.env.FORGEFLOW_RELEASE_NOTES ?? '界面刷新、项目卡片、大项目功能视图、应用内更新和新图标。';
+const payload = { schema: 1, version, installer, notes };
+const signature = sign(null, Buffer.from(JSON.stringify(payload)), key).toString('base64');
+const manifest = { ...payload, signature };
+await writeFile(join(root, 'apps/desktop/dist/latest.json'), JSON.stringify(manifest, null, 2) + '\n');
+console.log(`Signed update manifest for ${file}: ${installer.sha256}`);

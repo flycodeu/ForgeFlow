@@ -1,7 +1,7 @@
 {
   "name": "forgeflow",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packageManager": "pnpm@11.18.0",
   "engines": {
     "node": ">=24 <25"
@@ -11,6 +11,7 @@
     "capture": "node scripts/session-capture.mjs",
     "desktop:build": "node scripts/desktop-build.mjs",
     "desktop:package": "node scripts/desktop-build.mjs",
+    "desktop:release": "node scripts/desktop-build.mjs && node scripts/release-manifest.mjs",
     "desktop:start": "powershell -NoProfile -File scripts/desktop-start.ps1",
     "test:scripts": "node --test scripts/lib/session-capture.test.mjs scripts/lib/runtime-discovery.test.mjs scripts/lib/desktop-storage.test.mjs scripts/desktop-service.test.mjs scripts/installer-guard.test.mjs",
     "dev": "node scripts/free-dev-ports.mjs && node scripts/run-dev.mjs",

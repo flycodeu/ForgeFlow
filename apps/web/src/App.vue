@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type {
   AiRun, AiScope, AiTokenSummary, Capability, CreatedAiToken, DesignReview, Feature, FeatureStatus, HealthResponse, Module, Project,
   ProjectDetail, ProjectSourceKind, WorkflowMode, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary,
@@ -13,6 +13,7 @@ import TestingWorkspace from './components/TestingWorkspace.vue';
 import ProjectArchive from './components/ProjectArchive.vue';
 import ProjectMaterials from './components/ProjectMaterials.vue';
 import StorageSettings from './components/StorageSettings.vue';
+import UpdateSettings from './components/UpdateSettings.vue';
 import ArchiveRestore from './components/ArchiveRestore.vue';
 import Icon from './components/Icon.vue';
 import { api, ApiRequestError } from './api-client';
@@ -28,7 +29,7 @@ type ProjectSourceDraft = {
 };
 
 const projects = ref<Project[]>([]);
-const projectCardMeta = ref<Record<string, { updatedAt: string }>>({});
+const projectCardMeta = ref<Record<string, { updatedAt: string; modules?: number; features?: number; capabilities?: number }>>({});
 const projectDetail = ref<ProjectDetail | null>(null);
 const specificationDetail = ref<SpecificationDetail | null>(null);
 const revisions = ref<SpecificationRevisionSummary[]>([]);
@@ -42,6 +43,8 @@ const collapsedModules = ref(new Set<string>());
 const collapsedFeatures = ref(new Set<string>());
 const featureSearch = ref('');
 const featureSearchInput = ref('');
+const featureModuleFilter = ref('');
+const expandedBoardColumns = ref(new Set<string>());
 let searchTimer: number | null = null;
 watch(featureSearchInput, (newVal) => {
   if (searchTimer) clearTimeout(searchTimer);
@@ -68,6 +71,8 @@ const health = ref('连接中');
 const error = ref('');
 const notice = ref('');
 const busy = ref(false);
+const refreshing = ref(false);
+const refreshEpoch = ref(0);
 const archiveView = ref<{ canLeave: () => boolean } | null>(null);
 const archiveDocumentId = ref<string | null>(null);
 const projectKey = ref('');
@@ -308,7 +313,8 @@ function visibleFeatures(module: Module) {
   return featuresForModule(module.id).filter(feature => matchesFeatureSearch(module.name) || matchesFeatureSearch(feature.name)
     || capabilitiesForFeature(feature.id).some(capability => matchesFeatureSearch(capability.name)));
 }
-const visibleModules = computed(() => (projectDetail.value?.modules ?? []).filter(module => matchesFeatureSearch(module.name) || visibleFeatures(module).length));
+const visibleModules = computed(() => (projectDetail.value?.modules ?? []).filter(module =>
+  (!featureModuleFilter.value || module.id === featureModuleFilter.value) && (matchesFeatureSearch(module.name) || visibleFeatures(module).length)));
 function visibleCapabilities(module: Module, feature: Feature) {
   return capabilitiesForFeature(feature.id).filter(capability => matchesFeatureSearch(module.name) || matchesFeatureSearch(feature.name) || matchesFeatureSearch(capability.name));
 }
@@ -339,9 +345,9 @@ function capabilityVerificationLabel(capabilityId: string) {
   const run = (projectDetail.value?.runs ?? [])
     .filter((item) => taskIds.has(item.taskId))
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
-  if (!run) return '无 Run 记录';
+  if (!run) return '未登记验证';
   const label = verificationLabel(run);
-  return label === '—' ? '无 Run 记录' : label;
+  return label === '—' ? '未登记验证' : label;
 }
 function featureDesignLabel(featureId: string) {
   const design = projectDetail.value?.specifications.find((item) => item.featureId === featureId && item.kind === 'feature-design');
@@ -351,7 +357,12 @@ function featureDesignLabel(featureId: string) {
 }
 function featureImplementationLabel(featureId: string) {
   const tasks = tasksForFeature(featureId);
-  if (!tasks.length) return '待规划';
+  if (!tasks.length) {
+    const capabilities = capabilitiesForFeature(featureId);
+    if (capabilities.length && capabilities.every((item) => item.status === 'DONE')) return '代码已实现';
+    if (capabilities.some((item) => item.status === 'DONE')) return '部分已实现';
+    return '未登记任务';
+  }
   const done = tasks.filter((item) => item.status === 'DONE' || item.status === 'CONFIRMED').length;
   return `${done}/${tasks.length} 任务`;
 }
@@ -359,9 +370,13 @@ function featureVerificationLabel(featureId: string) {
   const runs = (projectDetail.value?.runs ?? [])
     .filter((item) => item.featureId === featureId)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  if (!runs[0]) return '无 Run 记录';
+  if (!runs[0]) return '未登记验证';
   const label = verificationLabel(runs[0]);
-  return label === '—' ? '无 Run 记录' : label;
+  return label === '—' ? '未登记验证' : label;
+}
+function featureStatusDisplay(feature: Feature) {
+  return feature.status === 'VERIFYING' && !projectDetail.value?.runs.some((run) => run.featureId === feature.id)
+    ? '待验证' : statusName(feature.status);
 }
 
 function moduleNameById(id: string): string {
@@ -372,6 +387,7 @@ const allFilteredFeatures = computed(() => {
   if (!projectDetail.value) return [];
   const query = featureSearch.value.trim().toLowerCase();
   return projectDetail.value.features.filter((f) => {
+    if (featureModuleFilter.value && f.moduleId !== featureModuleFilter.value) return false;
     if (!query) return true;
     const mod = projectDetail.value?.modules.find((m) => m.id === f.moduleId);
     return f.name.toLowerCase().includes(query)
@@ -393,6 +409,16 @@ const featureBoardColumns = [
 
 function featuresForColumn(col: { statuses: string[] }) {
   return allFilteredFeatures.value.filter((f) => col.statuses.includes(f.status));
+}
+const populatedBoardColumns = computed(() => featureBoardColumns.filter((col) => featuresForColumn(col).length));
+function boardFeatures(col: { key: string; statuses: string[] }) {
+  const features = featuresForColumn(col);
+  return expandedBoardColumns.value.has(col.key) ? features : features.slice(0, 8);
+}
+function toggleBoardColumn(key: string) {
+  const next = new Set(expandedBoardColumns.value);
+  if (next.has(key)) next.delete(key); else next.add(key);
+  expandedBoardColumns.value = next;
 }
 
 function statusBadgeClass(status: string) {
@@ -600,7 +626,8 @@ async function loadWorkspace() {
     try {
       const detail = await api<ProjectDetail>(`/api/projects/${project.id}`); const activity = await collectActivity(detail);
       const dates = [project.createdAt, ...detail.modules.map((item) => item.updatedAt), ...detail.features.map((item) => item.updatedAt), ...detail.tasks.map((item) => item.updatedAt), ...detail.runs.map((item) => item.updatedAt), ...detail.specifications.map((item) => item.createdAt), ...activity.map((item) => item.createdAt)];
-      return [project.id, { updatedAt: dates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]! }] as const;
+      return [project.id, { updatedAt: dates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]!,
+        modules: detail.modules.length, features: detail.features.length, capabilities: detail.capabilities.length }] as const;
     } catch { return [project.id, { updatedAt: project.createdAt }] as const; }
   }));
   projectCardMeta.value = Object.fromEntries(entries); workspacePage.value = 'projects'; selectedProjectId.value = null; projectDetail.value = null;
@@ -611,13 +638,40 @@ async function refreshCurrentProject() {
   if (selectedFeature.value) selectedFeature.value = projectDetail.value.features.find((item) => item.id === selectedFeature.value?.id) ?? null;
   if (selectedRun.value) selectedRun.value = projectDetail.value.runs.find((item) => item.id === selectedRun.value?.id) ?? null;
   const dates = [projectDetail.value.project.createdAt, ...projectDetail.value.modules.map((item) => item.updatedAt), ...projectDetail.value.features.map((item) => item.updatedAt), ...projectDetail.value.tasks.map((item) => item.updatedAt), ...projectDetail.value.runs.map((item) => item.updatedAt), ...projectDetail.value.specifications.map((item) => item.createdAt), ...projectActivity.value.map((item) => item.createdAt)];
-  projectCardMeta.value[id] = { updatedAt: dates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]! };
+  projectCardMeta.value[id] = { updatedAt: dates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]!,
+    modules: projectDetail.value.modules.length, features: projectDetail.value.features.length,
+    capabilities: projectDetail.value.capabilities.length };
 }
+let lastDataRefresh = 0;
+async function refreshVisibleData(manual = true) {
+  if (appView.value === 'loading' || (!manual && ['archive', 'records'].includes(workspacePage.value))) return;
+  if (refreshing.value || busy.value || showProjectDialog.value || showFeatureDialog.value || showModuleDialog.value
+    || showSpecDialog.value || showRestoreDialog.value || (isDocumentPage.value && documentMode.value === 'edit')
+    || (archiveView.value && !archiveView.value.canLeave())) return;
+  refreshing.value = true;
+  try {
+    const status = await api<HealthResponse>('/api/health');
+    health.value = status.status === 'ok' && status.database === 'ok' ? '服务正常' : '服务异常';
+    if (appView.value === 'tokens') tokens.value = await api<AiTokenSummary[]>('/api/ai-tokens');
+    else if (selectedProjectId.value) {
+      await refreshCurrentProject();
+      if (selectedSpecId.value && documentMode.value === 'read') await loadSpecification(selectedSpecId.value);
+      refreshEpoch.value++;
+    } else await loadWorkspace();
+    lastDataRefresh = Date.now();
+    if (manual) { notice.value = '已获取最新数据'; error.value = ''; }
+  } catch (cause) { if (manual) showError(cause); else health.value = '连接失败'; }
+  finally { refreshing.value = false; }
+}
+function refreshWhenVisible() {
+  if (document.visibilityState === 'visible' && Date.now() - lastDataRefresh > 20000) void refreshVisibleData(false);
+}
+let refreshInterval: number | undefined;
 async function selectProject(id: string) {
   if (archiveView.value && !archiveView.value.canLeave()) return;
   clearMessage(); busy.value = true; selectedProjectId.value = id; selectedSpecId.value = null; archiveDocumentId.value = null;
   specificationDetail.value = null; selectedRevision.value = null; revisions.value = []; projectActivity.value = [];
-  try { await refreshCurrentProject(); featureSearch.value = ''; workspacePage.value = 'features'; mobileNavOpen.value = false; }
+  try { await refreshCurrentProject(); featureSearch.value = ''; featureSearchInput.value = ''; featureModuleFilter.value = ''; expandedBoardColumns.value = new Set(); workspacePage.value = 'features'; mobileNavOpen.value = false; }
   catch (cause) { showError(cause); } finally { busy.value = false; }
 }
 async function loadSpecification(id: string) {
@@ -1169,6 +1223,8 @@ function confirmDeleteFeature(feature: Feature) {
   });
 }
 onMounted(async () => {
+  document.addEventListener('visibilitychange', refreshWhenVisible);
+  refreshInterval = window.setInterval(refreshWhenVisible, 30000);
   try {
     const status = await api<HealthResponse>('/api/health'); health.value = status.status === 'ok' && status.database === 'ok' ? '服务正常' : '服务异常';
     await loadWorkspace();
@@ -1183,15 +1239,20 @@ onMounted(async () => {
     appView.value = 'workspace';
   } catch (cause) { health.value = '连接失败'; appView.value = 'workspace'; showError(cause); }
 });
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', refreshWhenVisible);
+  if (refreshInterval !== undefined) window.clearInterval(refreshInterval);
+});
 </script>
 
 <template>
   <div class="app-shell">
-    <header class="topbar">
-      <button class="brand" type="button" @click="showProjects"><span class="brand-mark">F</span><span class="brand-copy"><strong>ForgeFlow</strong></span></button>
+    <header class="topbar" :class="{ 'has-project': appView === 'workspace' && !!currentProject }">
+      <button class="brand" type="button" @click="showProjects"><span class="brand-mark"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M18 14v36M18 18h20M18 32h14M18 46h20"/><circle cx="45" cy="18" r="5"/><circle cx="39" cy="32" r="5"/><circle cx="45" cy="46" r="5"/></svg></span><span class="brand-copy"><strong>ForgeFlow</strong></span></button>
       <button v-if="appView === 'workspace' && currentProject" class="project-switcher" type="button" @click="showProjects"><span>{{ currentProject.name }}</span><Icon name="chevron-down" :size="12" /></button>
       <div class="top-actions">
         <div class="health"><span class="health-dot" :class="{ offline: health !== '服务正常' }"></span>{{ health }}</div>
+        <button v-if="appView !== 'loading'" class="top-link refresh-action" type="button" :disabled="refreshing || busy || (isDocumentPage && documentMode === 'edit')" :aria-busy="refreshing" @click="refreshVisibleData()"><Icon name="refresh" :size="14" />{{ refreshing ? '刷新中…' : '刷新' }}</button>
         <button v-if="appView === 'workspace' && currentProject" class="top-link" @click="showProjects"><Icon name="overview" :size="14" style="margin-right: 4px;" />项目</button>
         <button v-if="appView === 'workspace'" class="top-link" @click="openTokens"><Icon name="settings" :size="14" style="margin-right: 4px;" />设置</button>
         <button v-if="appView === 'tokens'" class="top-link" @click="closeTokens"><Icon name="arrow-right" :size="14" style="transform: rotate(180deg); margin-right: 4px;" />返回工作台</button>
@@ -1212,6 +1273,7 @@ onMounted(async () => {
           </div>
         </div>
 
+        <UpdateSettings />
         <StorageSettings />
         <div class="settings-grid">
           <!-- Left Column: Token Management -->
@@ -1298,35 +1360,27 @@ onMounted(async () => {
       <main v-if="workspacePage === 'projects'" class="project-home">
         <div class="project-home-heading"><h1>我的项目</h1><div class="top-actions"><button class="secondary-button" type="button" @click="showRestoreDialog = true"><Icon name="refresh" :size="14" style="margin-right: 6px;" />恢复存档</button><button class="primary-button" type="button" @click="openProjectDialog"><Icon name="plus" :size="14" style="margin-right: 6px;" />新建项目</button></div></div>
         <section v-if="projects.length" class="project-card-grid">
-          <div
+          <article
             v-for="project in projects"
             :key="project.id"
             class="project-card"
-            role="button"
-            tabindex="0"
-            @click="selectProject(project.id)"
-            @keydown.enter.self="selectProject(project.id)"
-            @keydown.space.prevent.self="selectProject(project.id)"
           >
-            <div class="project-card-top">
-              <div class="card-top-actions">
-                <button
-                  type="button"
-                  class="card-delete-btn"
-                  title="删除项目"
-                  @click.stop.prevent="confirmDeleteProject(project)"
-                >
-                  删除
-                </button>
-                <b class="card-arrow"><Icon name="arrow-right" :size="14" /></b>
+            <button type="button" class="project-card-main" :aria-label="`打开项目 ${project.name}`" @click="selectProject(project.id)">
+              <div class="project-card-top">
+                <span class="project-key-tag">{{ project.projectKey }}</span>
+                <span v-if="project.projectType && project.projectType !== 'GENERAL'" class="project-type-tag" :title="project.projectType">{{ project.projectType }}</span>
               </div>
-            </div>
-            <h2 class="project-card-title">{{ project.name }}</h2>
-            <dl class="project-card-meta">
-              <div><dt>创建时间</dt><dd>{{ formatDate(project.createdAt) }}</dd></div>
-              <div><dt>最近更新</dt><dd>{{ formatTime(projectCardMeta[project.id]?.updatedAt ?? project.createdAt) }}</dd></div>
-            </dl>
-          </div>
+              <h2 class="project-card-title">{{ project.name }}</h2>
+              <p class="project-card-desc">{{ project.description || '暂无项目简介' }}</p>
+              <div v-if="projectCardMeta[project.id]?.features !== undefined" class="project-card-stats">
+                <span><strong>{{ projectCardMeta[project.id]?.modules }}</strong> 模块</span>
+                <span><strong>{{ projectCardMeta[project.id]?.features }}</strong> 功能</span>
+                <span><strong>{{ projectCardMeta[project.id]?.capabilities }}</strong> 操作</span>
+              </div>
+              <div class="project-card-footer"><span>更新于 {{ formatTime(projectCardMeta[project.id]?.updatedAt ?? project.createdAt) }}</span><Icon name="arrow-right" :size="17" /></div>
+            </button>
+            <button type="button" class="card-delete-btn" :aria-label="`删除项目 ${project.name}`" :title="`删除项目 ${project.name}`" @click="confirmDeleteProject(project)"><Icon name="trash" :size="15" /></button>
+          </article>
         </section>
         <section v-else class="surface empty-state project-empty"><span>00</span><h3>还没有项目</h3><button class="primary-button" type="button" @click="openProjectDialog"><Icon name="plus" :size="14" style="margin-right: 6px;" />新建项目</button></section>
       </main>
@@ -1388,11 +1442,11 @@ onMounted(async () => {
             </div>
           </template>
 
-          <ProjectMaterials v-if="workspacePage === 'materials'" :project-id="currentProject.id" :specifications="projectDetail.specifications"
+          <ProjectMaterials v-if="workspacePage === 'materials'" :key="refreshEpoch" :project-id="currentProject.id" :specifications="projectDetail.specifications"
             :features="projectDetail.features" :capabilities="projectDetail.capabilities" @open-specification="openOtherMaterial"
             @open-document="openArchiveDocument" @open-capability="openFeature" />
 
-          <SourceIntegration v-if="workspacePage === 'sources'" :project-id="currentProject.id" :sources="projectDetail.sources" :analyses="projectDetail.sourceAnalyses"
+          <SourceIntegration v-if="workspacePage === 'sources'" :key="refreshEpoch" :project-id="currentProject.id" :sources="projectDetail.sources" :analyses="projectDetail.sourceAnalyses"
             @refresh="refreshCurrentProject" @notice="notice = $event; error = ''" @error="error = $event; notice = ''" />
 
           <template v-if="isDocumentPage">
@@ -1484,6 +1538,7 @@ onMounted(async () => {
                   <Icon name="search" :size="14" class="feature-search-icon" />
                   <input v-model="featureSearchInput" type="search" aria-label="搜索功能" placeholder="搜索功能或能力名称" />
                 </div>
+                <select v-if="projectDetail.modules.length > 1" v-model="featureModuleFilter" class="feature-module-filter" aria-label="按模块筛选"><option value="">全部模块</option><option v-for="module in projectDetail.modules" :key="module.id" :value="module.id">{{ module.name }}</option></select>
                 <div class="feature-toolbar-actions">
                   <button type="button" :disabled="!!featureSearch.trim()" @click="setTreeExpanded(true)">全部展开</button>
                   <button type="button" :disabled="!!featureSearch.trim()" @click="setTreeExpanded(false)">全部收起</button>
@@ -1506,15 +1561,15 @@ onMounted(async () => {
                           <span v-else class="tree-toggle-placeholder"></span>
                           <button class="feature-open" type="button" :title="feature.name" @click="openFeature(feature)"><span class="feature-copy"><strong>{{ feature.name }}</strong></span></button>
                         </div>
-                        <div class="feature-metric"><small>状态</small><span class="status-text" :data-status="feature.status">{{ statusName(feature.status) }}</span></div>
-                        <div class="feature-metric tree-verification" :class="{ muted: featureVerificationLabel(feature.id) === '无 Run 记录' }"><span>{{ featureVerificationLabel(feature.id) }}</span></div>
+                        <div class="feature-metric"><small>状态</small><span class="status-text" :data-status="feature.status">{{ featureStatusDisplay(feature) }}</span></div>
+                        <div class="feature-metric tree-verification" :class="{ muted: featureVerificationLabel(feature.id) === '未登记验证' }"><span>{{ featureVerificationLabel(feature.id) }}</span></div>
                         <details class="tree-menu"><summary :aria-label="`${feature.name}的操作`">···</summary><div class="tree-menu-items"><button type="button" @click="editFeature(module, feature)">编辑功能</button><button type="button" class="danger-link-btn" @click.prevent="confirmDeleteFeature(feature)">删除功能</button></div></details>
                       </article>
                       <div v-if="capabilitiesForFeature(feature.id).length && (featureSearch.trim() || !collapsedFeatures.has(feature.id))" class="capability-list">
                         <button v-for="capability in visibleCapabilities(module, feature)" :key="capability.id" class="capability-row" type="button" :title="capability.name" @click="openFeature(feature, capability.id)">
                           <span class="capability-primary"><span class="capability-joint" aria-hidden="true"></span><span class="capability-copy"><strong>{{ capability.name }}</strong></span></span>
                           <span class="feature-metric"><small>状态</small><span class="status-text" :data-status="capability.status">{{ capabilityStatusName(capability.status) }}</span></span>
-                          <span class="feature-metric tree-verification" :class="{ muted: capabilityVerificationLabel(capability.id) === '无 Run 记录' }"><span>{{ capabilityVerificationLabel(capability.id) }}</span></span>
+                          <span class="feature-metric tree-verification" :class="{ muted: capabilityVerificationLabel(capability.id) === '未登记验证' }"><span>{{ capabilityVerificationLabel(capability.id) }}</span></span>
                           <span class="capability-enter" aria-hidden="true">→</span>
                         </button>
                       </div>
@@ -1534,6 +1589,7 @@ onMounted(async () => {
                   <Icon name="search" :size="14" class="feature-search-icon" />
                   <input v-model="featureSearchInput" type="search" aria-label="搜索功能卡片" placeholder="搜索功能名称或编号" />
                 </div>
+                <select v-if="projectDetail.modules.length > 1" v-model="featureModuleFilter" class="feature-module-filter" aria-label="按模块筛选"><option value="">全部模块</option><option v-for="module in projectDetail.modules" :key="module.id" :value="module.id">{{ module.name }}</option></select>
                 <div class="feature-toolbar-stats">
                   <span>共 {{ allFilteredFeatures.length }} 项功能</span>
                 </div>
@@ -1550,13 +1606,13 @@ onMounted(async () => {
                 >
                   <div class="feature-card-header">
                     <span class="feature-module-badge">{{ moduleNameById(feature.moduleId) }}</span>
-                    <span class="status-badge" :class="statusBadgeClass(feature.status)">{{ statusName(feature.status) }}</span>
+                    <span class="status-badge" :class="statusBadgeClass(feature.status)">{{ featureStatusDisplay(feature) }}</span>
                   </div>
                   <h3 class="feature-card-name">{{ feature.name }}</h3>
                   <div class="feature-card-stats">
                     <span class="stat-pill">{{ capabilitiesForFeature(feature.id).length }} 项能力</span>
                     <span class="stat-pill">{{ tasksForFeature(feature.id).length }} 个任务</span>
-                    <span class="stat-pill verification" :class="{ empty: featureVerificationLabel(feature.id) === '无 Run 记录' }">{{ featureVerificationLabel(feature.id) }}</span>
+                    <span class="stat-pill verification" :class="{ empty: featureVerificationLabel(feature.id) === '未登记验证' }">{{ featureVerificationLabel(feature.id) }}</span>
                   </div>
                   <div class="feature-card-footer">
                     <code class="feature-code">#{{ feature.code }}</code>
@@ -1571,9 +1627,15 @@ onMounted(async () => {
 
             <!-- Mode 3: Stage Kanban Board -->
             <template v-else-if="featureViewMode === 'board'">
-              <div class="feature-board-grid">
+              <div class="feature-toolbar board-toolbar">
+                <div class="feature-search-wrap"><Icon name="search" :size="14" class="feature-search-icon" /><input v-model="featureSearchInput" type="search" aria-label="搜索看板功能" placeholder="搜索功能或能力名称" /></div>
+                <select v-if="projectDetail.modules.length > 1" v-model="featureModuleFilter" class="feature-module-filter" aria-label="按模块筛选"><option value="">全部模块</option><option v-for="module in projectDetail.modules" :key="module.id" :value="module.id">{{ module.name }}</option></select>
+                <span class="board-scope-note">{{ allFilteredFeatures.length }} 项功能<span v-if="populatedBoardColumns.some(col => featuresForColumn(col).length > 8)"> · 每阶段先显示 8 项</span></span>
+              </div>
+              <div class="board-stage-summary" aria-label="各阶段功能数量"><span v-for="col in featureBoardColumns" :key="col.key" :class="{ active: featuresForColumn(col).length }"><i class="board-status-dot" :class="col.color"></i>{{ col.label }} <strong>{{ featuresForColumn(col).length }}</strong></span></div>
+              <div v-if="populatedBoardColumns.length" class="feature-board-grid">
                 <div
-                  v-for="col in featureBoardColumns"
+                  v-for="col in populatedBoardColumns"
                   :key="col.key"
                   class="board-column surface"
                 >
@@ -1586,7 +1648,7 @@ onMounted(async () => {
                   </div>
                   <div class="board-column-body">
                     <div
-                      v-for="feature in featuresForColumn(col)"
+                      v-for="feature in boardFeatures(col)"
                       :key="feature.id"
                       class="board-card"
                       role="button"
@@ -1598,15 +1660,17 @@ onMounted(async () => {
                       <div class="board-card-title">{{ feature.name }}</div>
                       <div class="board-card-meta">
                         <span>{{ capabilitiesForFeature(feature.id).length }} 能力</span>
-                        <span class="board-verification" :class="{ empty: featureVerificationLabel(feature.id) === '无 Run 记录' }">{{ featureVerificationLabel(feature.id) }}</span>
+                        <span class="board-verification" :class="{ empty: featureVerificationLabel(feature.id) === '未登记验证' }">{{ featureVerificationLabel(feature.id) }}</span>
                       </div>
                     </div>
+                    <button v-if="featuresForColumn(col).length > 8" class="board-show-more" type="button" @click="toggleBoardColumn(col.key)">{{ expandedBoardColumns.has(col.key) ? '收起' : `查看其余 ${featuresForColumn(col).length - 8} 项` }}</button>
                     <div v-if="!featuresForColumn(col).length" class="board-column-empty">
                       暂无功能
                     </div>
                   </div>
                 </div>
               </div>
+              <div v-else class="surface compact-empty">没有匹配的功能</div>
             </template>
 
             <!-- Mode 4: Markdown Document Specification -->
@@ -1668,7 +1732,7 @@ onMounted(async () => {
            <template v-if="workspacePage === 'planning'"><div class="compact-page-heading"><div class="heading-title-group"><h1>开发计划</h1><span class="heading-badge">共 {{ projectDetail.features.length }} 项功能</span></div></div><section class="surface plan-board"><div class="plan-board-head"><span>功能 / 模块</span><span>设计</span><span>关联任务</span><span>状态</span></div><button v-for="feature in projectDetail.features" :key="feature.id" type="button" class="plan-board-row" @click="openFeature(feature)"><span class="plan-feature-cell"><strong>{{ feature.name }}</strong></span><span class="plan-spec-cell"><span class="spec-status-badge">{{ projectDetail.project.workflowMode === 'AUTO' ? (projectDetail.specifications.find(item => item.featureId === feature.id)?.latestRevisionNumber ? '已记录' : '待设计') : (projectDetail.specifications.find(item => item.featureId === feature.id)?.approvedRevisionNumber ? '已批准' : '待批准') }}</span></span><span class="plan-tasks-cell"><i v-for="task in tasksForFeature(feature.id)" :key="task.id" class="task-tag">{{ taskCategoryName(task.category) }}<b v-if="task.area"> / {{ task.area }}</b></i><em v-if="!tasksForFeature(feature.id).length" class="no-task">待规划</em></span><span class="plan-action-cell">{{ tasksForFeature(feature.id).length }} 项 <b>→</b></span></button><div v-if="!projectDetail.features.length" class="compact-empty">暂无功能</div></section></template>
 
           <CapabilityProgress v-if="workspacePage === 'development'" :detail="projectDetail" mode="development" @open-feature="openFeature" />
-          <ProjectArchive v-if="workspacePage === 'archive' || workspacePage === 'records'" ref="archiveView" :key="projectDetail.project.id + workspacePage" :project-id="projectDetail.project.id" :initial-tab="workspacePage === 'records' ? 'records' : 'documents'" :initial-document-id="archiveDocumentId" />
+          <ProjectArchive v-if="workspacePage === 'archive' || workspacePage === 'records'" ref="archiveView" :key="projectDetail.project.id + workspacePage + refreshEpoch" :project-id="projectDetail.project.id" :initial-tab="workspacePage === 'records' ? 'records' : 'documents'" :initial-document-id="archiveDocumentId" />
           <TestingWorkspace v-if="workspacePage === 'testing'" :detail="projectDetail" @open-feature="openFeature" />
           <template v-if="workspacePage === 'ai'">
             <div class="compact-page-heading"><div class="heading-title-group"><h1>执行记录</h1><span class="heading-badge">共 {{ sortedRuns.length }} 次运行</span></div></div>

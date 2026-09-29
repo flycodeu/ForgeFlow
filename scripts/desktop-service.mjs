@@ -1,6 +1,6 @@
 import { fork } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { writeFile, rename, rm, realpath, appendFile } from 'node:fs/promises';
+import { writeFile, rename, rm, realpath, appendFile, readFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,6 +41,7 @@ export async function verifyIdentity(url, secret, instanceId) {
 
 export async function startDesktopService({ runtimeRoot, dataPath, deferPublication = false, storageOverride = false, emit = (message) => process.stdout.write(`${JSON.stringify(message)}\n`) }) {
   dataPath = await secureDataDirectory(dataPath);
+  const appVersion = process.env.FORGEFLOW_APP_VERSION ?? await readFile(join(runtimeRoot, 'version.json'), 'utf8').then((raw) => JSON.parse(raw).version).catch(() => undefined);
   const lock = await acquireRuntimeLock(dataPath);
   const descriptor = join(dataPath, 'runtime.json');
   const logPath = join(dataPath, 'desktop.log');
@@ -71,7 +72,8 @@ export async function startDesktopService({ runtimeRoot, dataPath, deferPublicat
       env: { ...process.env, PORT: '0', FORGEFLOW_DB_PATH: join(dataPath, 'forgeflow.db'),
         FORGEFLOW_WEB_DIST: join(runtimeRoot, 'apps/web/dist'), FORGEFLOW_DESKTOP_SECRET: secret,
         FORGEFLOW_DESKTOP_INSTANCE: instanceId, FORGEFLOW_CURRENT_DATA_DIR: dataPath,
-        FORGEFLOW_STORAGE_OVERRIDE: String(storageOverride), FORGEFLOW_STORAGE_PENDING: deferPublication ? '1' : '0' },
+        FORGEFLOW_STORAGE_OVERRIDE: String(storageOverride), FORGEFLOW_STORAGE_PENDING: deferPublication ? '1' : '0',
+        ...(appVersion ? { FORGEFLOW_APP_VERSION: appVersion } : {}) },
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     });
     child = owned;
@@ -80,6 +82,9 @@ export async function startDesktopService({ runtimeRoot, dataPath, deferPublicat
     const timeout = setTimeout(() => { if (!ready && !stopping) { log('Server readiness timed out'); owned.kill(); } }, 20000);
     owned.on('message', async (message) => {
       if (message?.type === 'open-storage' && child === owned && !stopping) { emit({ type: 'open-storage' }); return; }
+      if (message?.type === 'install-update' && child === owned && !stopping && typeof message.installer === 'string') {
+        emit({ type: 'install-update', installer: message.installer }); return;
+      }
       if (message?.type !== 'ready' || message.instanceId !== instanceId || stopping || child !== owned) return;
       try {
         if (!Number.isInteger(message.port) || message.port < 1 || message.port > 65535) throw new Error('Invalid runtime port');

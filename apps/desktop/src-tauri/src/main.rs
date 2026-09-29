@@ -70,14 +70,7 @@ fn main() {
             let data = MenuItem::with_id(app, "storage", "数据存储位置…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "停止后台并退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &data, &status, &quit])?;
-            let mut pixels = vec![0u8; 32 * 32 * 4];
-            for y in 0..32 { for x in 0..32 {
-                let i = (y * 32 + x) * 4;
-                let letter = (9..13).contains(&x) && (7..26).contains(&y)
-                    || (9..24).contains(&x) && (7..11).contains(&y)
-                    || (9..21).contains(&x) && (15..19).contains(&y);
-                pixels[i..i+4].copy_from_slice(if letter { &[255,255,255,255] } else { &[45,103,86,255] });
-            }}
+            let pixels = include_bytes!("../icons/icon.rgba").to_vec();
             TrayIconBuilder::new().icon(tauri::image::Image::new_owned(pixels, 32, 32))
                 .tooltip("ForgeFlow · 关闭窗口后仍在后台运行")
                 .menu(&menu).show_menu_on_left_click(false)
@@ -100,6 +93,7 @@ fn main() {
             if !node.is_file() || !bridge.is_file() { return Err("缺少桌面运行资源，请先运行桌面打包准备命令".into()); }
             let mut command = Command::new(node);
             command.arg(bridge).env("FORGEFLOW_RUNTIME_ROOT", &root)
+                .env("FORGEFLOW_INSTALLED", if std::env::current_exe().ok().and_then(|path| path.parent().map(|dir| dir.join("Uninstall.exe").is_file())).unwrap_or(false) { "1" } else { "0" })
                 .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
             #[cfg(windows)] { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
             let mut child = command.spawn()?;
@@ -116,6 +110,32 @@ fn main() {
                         Some("open-storage") => { let _ = storage::send(&handle, serde_json::json!({"type":"storage-info"})); storage::show(&handle); }
                         Some("storage-progress") => { let _ = status.set_text("数据目录处理中，请勿退出"); }
                         Some("storage-error") => { storage::show(&handle); let _ = status.set_text("存储操作未完成，请查看说明"); }
+                        Some("install-update") => {
+                            let Some(installer) = message["installer"].as_str() else { continue };
+                            let Ok(actual) = std::fs::canonicalize(installer) else { continue };
+                            let Ok(allowed) = std::fs::canonicalize(std::env::temp_dir().join("ForgeFlow-updates")) else { continue };
+                            if !actual.starts_with(&allowed) || !actual.file_name().and_then(|name| name.to_str()).map(|name| name.starts_with("ForgeFlow-Setup-") && name.ends_with(".exe")).unwrap_or(false) { continue; }
+                            let Ok(exe) = std::env::current_exe() else { continue };
+                            let Some(install_dir) = exe.parent() else { continue };
+                            if !install_dir.join("Uninstall.exe").is_file() { continue; }
+                            let helper = root.join("install-update.ps1");
+                            if !helper.is_file() { continue; }
+                            let temp_helper = std::env::temp_dir().join(format!("ForgeFlow-update-install-{}.ps1", std::process::id()));
+                            if std::fs::copy(&helper, &temp_helper).is_err() { continue; }
+                            let _ = status.set_text("正在安装新版本");
+                            let app = handle.clone();
+                            let install_dir = install_dir.to_path_buf();
+                            std::thread::spawn(move || {
+                                stop(&app);
+                                let mut process = Command::new("powershell.exe");
+                                process.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+                                    .arg(temp_helper).arg("-Installer").arg(actual).arg("-InstallDir").arg(install_dir)
+                                    .arg("-ParentPid").arg(std::process::id().to_string())
+                                    .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+                                #[cfg(windows)] { use std::os::windows::process::CommandExt; process.creation_flags(0x08000000); }
+                                if process.spawn().is_ok() { app.exit(0); }
+                            });
+                        }
                         Some("ready") => {
                             let Some(url) = message["url"].as_str().and_then(|value| {
                                 trusted_origin.lock().ok()?.authenticated_ready(value)

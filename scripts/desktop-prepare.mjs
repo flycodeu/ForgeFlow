@@ -63,6 +63,8 @@ await copyFile(join(root, 'scripts/project-archive.mjs'), join(runtime, 'scripts
 await copyFile(join(root, 'scripts/session-capture.mjs'), join(runtime, 'scripts/session-capture.mjs'));
 await cp(join(root, 'scripts/lib'), join(runtime, 'scripts/lib'), { recursive: true });
 await copyFile(process.execPath, join(runtime, 'node.exe'));
+await copyFile(join(root, 'apps/desktop/updater/install-update.ps1'), join(runtime, 'install-update.ps1'));
+await copyFile(join(root, 'package.json'), join(runtime, 'version.json'));
 const check = spawnSync(join(runtime, 'node.exe'), ['--input-type=module', '-e', "import Database from 'better-sqlite3'; const db = new Database(':memory:'); console.log(db.prepare('select 1 as ok').get().ok); db.close();"], { cwd: join(runtime, 'apps/server'), windowsHide: true, encoding: 'utf8' });
 if (check.status !== 0 || check.stdout.trim() !== '1') throw new Error('Packaged SQLite native-module smoke test failed.');
 console.log(`Prepared standalone runtime: ${runtime}`);

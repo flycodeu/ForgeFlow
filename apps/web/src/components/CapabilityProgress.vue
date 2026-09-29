@@ -33,7 +33,7 @@ function verification(capability: Capability) {
   if (latest?.verificationSummary?.status === 'PASS') return `✓ ${latest.verificationSummary.origin === 'AI_REPORTED' ? 'AI 报告通过' : '有证据通过'}`;
   if (latest?.verificationSummary) return `${latest.verificationSummary.status} · ${latest.verificationSummary.origin}`;
   if (capability.status === 'TESTING') return '验证中';
-  return '未开始';
+  return '未登记验证';
 }
 function statusName(status: Capability['status']) {
   return { DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中', TESTING: '验证中', DONE: '已完成', BLOCKED: '受阻' }[status];

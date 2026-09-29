@@ -1,11 +1,14 @@
 import { timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, relative, isAbsolute, extname } from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ApiError } from '../../shared/api-error.js';
+import type { DesktopUpdateService } from './updates.js';
 
-export type RuntimeOptions = { desktopSecret?: string; instanceId?: string; webDist?: string; dataPath?: string; storageOverride?: boolean; openStorage?: () => void };
+export type RuntimeOptions = { desktopSecret?: string; instanceId?: string; webDist?: string; dataPath?: string; storageOverride?: boolean; openStorage?: () => void; updates?: DesktopUpdateService };
 const cookieName = 'forgeflow_desktop';
+const packageVersion = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8')).version as string;
 const loopback = new Set(['localhost', '127.0.0.1', '[::1]']);
 function matches(actual: unknown, expected: string) {
   return typeof actual === 'string' && Buffer.byteLength(actual) === Buffer.byteLength(expected)
@@ -46,6 +49,19 @@ export function registerRuntime(app: FastifyInstance, options: RuntimeOptions, a
   });
   app.get('/api/runtime/identity', async () => ({ protocolVersion: 1, mode: desktopSecret ? 'desktop' : 'web', instanceId: instanceId ?? null }));
   app.get('/api/runtime/storage', async () => ({ desktop: !!desktopSecret, dataPath: desktopSecret ? options.dataPath ?? null : null, canManage: !!options.openStorage, override: !!options.storageOverride }));
+  app.get('/api/runtime/update', async () => options.updates?.status() ?? { phase: 'unavailable', currentVersion: packageVersion });
+  app.post('/api/runtime/update/check', async () => {
+    if (!options.updates) throw new ApiError(503, 'DESKTOP_REQUIRED', '仅桌面版支持应用内更新');
+    return options.updates.check();
+  });
+  app.post('/api/runtime/update/download', async () => {
+    if (!options.updates) throw new ApiError(503, 'DESKTOP_REQUIRED', '仅桌面版支持应用内更新');
+    return options.updates.startDownload();
+  });
+  app.post('/api/runtime/update/install', async () => {
+    if (!options.updates) throw new ApiError(503, 'DESKTOP_REQUIRED', '仅桌面版支持应用内更新');
+    return options.updates.install();
+  });
   if (desktopSecret) {
     app.post('/api/runtime/storage/open', async () => {
       if (!options.openStorage) throw new ApiError(503, 'HOST_UNAVAILABLE', '请从桌面托盘打开数据存储设置');
@@ -69,7 +85,7 @@ export function registerRuntime(app: FastifyInstance, options: RuntimeOptions, a
       let pathname: string;
       try { pathname = decodeURIComponent(request.url.split('?')[0]!); }
       catch { throw new ApiError(400, 'INVALID_PATH', '路径无效'); }
-      if (pathname !== '/' && !pathname.startsWith('/assets/') && pathname !== '/favicon.ico') return reply.code(404).send();
+      if (pathname !== '/' && !pathname.startsWith('/assets/') && pathname !== '/favicon.ico' && pathname !== '/favicon.svg') return reply.code(404).send();
       const file = resolve(root, pathname === '/' ? 'index.html' : `.${pathname}`);
       try {
         const actual = await realpath(file);
