@@ -6,9 +6,9 @@
 node scripts/installer-build.mjs
 ```
 
-输出 `apps/desktop/dist/ForgeFlow-Setup-0.2.0.exe`。安装向导可选择空的本地目录，默认当前用户的 `LocalAppData\Programs\ForgeFlow`，不需要管理员权限。程序目录与项目数据目录分开；数据目录由应用首次启动/设置页管理，选择保存在 `%LOCALAPPDATA%\ForgeFlow\storage.json`。卸载不删除这份配置或数据目录。
+输出 `apps/desktop/dist/ForgeFlow-Setup-0.2.1.exe`。安装向导可选择空的本地目录，默认当前用户的 `LocalAppData\Programs\ForgeFlow`，不需要管理员权限。程序目录与项目数据目录分开；数据目录由应用首次启动/设置页管理，选择保存在 `%LOCALAPPDATA%\ForgeFlow\storage.json`。卸载不删除这份配置或数据目录。
 
-0.2.0 起，安装版可从系统设置内检查 GitHub Release，签名校验更新清单、按 SHA256 校验安装包，显示下载进度后自动退出、静默安装并重启。旧版首次升级到 0.2.0 仍需手动运行安装包。手动升级时先从托盘执行“停止后台并退出”。安装器识别已有 ForgeFlow 目录并允许就地覆盖；若仍有残留进程，保护脚本会尝试强制结束。其他非空目录会被拒绝。更新清单签名不等于 Windows Authenticode 代码签名；安装包尚未做 Authenticode 签名。机器需已有 Microsoft Edge WebView2 Runtime。
+0.2.0 起，安装版可从系统设置内检查 GitHub Release，签名校验更新清单、按 SHA256 校验安装包，显示下载进度后自动退出、静默安装并重启。0.1.x 首次升级仍需手动运行新版安装包。手动升级时先从托盘执行“停止后台并退出”。安装器识别已有 ForgeFlow 目录并允许就地覆盖；若仍有残留进程，保护脚本会尝试强制结束。其他非空目录会被拒绝。更新清单签名不等于 Windows Authenticode 代码签名；安装包尚未做 Authenticode 签名。机器需已有 Microsoft Edge WebView2 Runtime。
 
 卸载先检查程序/后台进程、文件占用和路径，再按内嵌 SHA256 清单删除未修改的应用文件。新增文件、被修改的文件、数据库和外部数据目录不属于删除范围；不使用递归删除。卸载器移动过位置、清单被改动或出现链接目录时拒绝卸载。受文件锁影响时退出并保留文件，可关闭占用后重试。
 
@@ -28,4 +28,4 @@ node scripts/installer-build.mjs
 node scripts/installer-smoke.mjs
 ```
 
-测试包注册键和开始菜单入口独立，默认安装路径被强制限定到 `.artifacts`；测试仍显式指定中文带空格目录。测试生成数据保留在 `.artifacts/installer-smoke-*`，不启动真实项目。测试覆盖自选目录、重复安装拒绝、锁定文件时不部分删除，以及用户文件和修改文件保留。界面选择与静默 `/D=` 使用相同目录校验函数，不能将静默测试写成鼠标操作验收。
+测试包注册键和开始菜单入口独立，默认安装路径被强制限定到 `.artifacts`；测试仍显式指定中文带空格目录。测试生成数据保留在 `.artifacts/installer-smoke-*`，不启动真实项目。测试覆盖自选目录、已有安装就地升级、锁定文件时不部分删除，以及用户文件和修改文件保留。界面选择与静默 `/D=` 使用相同目录校验函数，不能将静默测试写成鼠标操作验收。

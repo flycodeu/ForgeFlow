@@ -37,6 +37,13 @@ const pxSize = computed(() => (typeof props.size === 'number' ? `${props.size}px
       <rect x="3" y="14" width="7" height="7" rx="1.5" />
     </template>
 
+    <template v-else-if="name === 'map'">
+      <rect x="9" y="2" width="6" height="5" rx="1" />
+      <rect x="2" y="17" width="6" height="5" rx="1" />
+      <rect x="16" y="17" width="6" height="5" rx="1" />
+      <path d="M12 7v5M5 17v-5h14v5" />
+    </template>
+
     <!-- Features / ListTree -->
     <template v-else-if="name === 'features' || name === 'list-tree'">
       <path d="M21 12h-8" />

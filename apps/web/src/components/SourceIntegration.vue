@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { ProjectSource, ProjectSourceKind, SourceAnalysis } from '@forgeflow/contracts';
+import type { Project, ProjectSource, ProjectSourceKind, SourceAnalysis } from '@forgeflow/contracts';
 import { api } from '../api-client';
 
-const props = defineProps<{ projectId: string; sources: ProjectSource[]; analyses: SourceAnalysis[] }>();
+const props = defineProps<{ project: Project; projectId: string; sources: ProjectSource[]; analyses: SourceAnalysis[] }>();
 const emit = defineEmits<{ refresh: []; notice: [message: string]; error: [message: string] }>();
 
 type SourceDraft = {
@@ -25,6 +25,26 @@ type SourceDraft = {
 const defaultIncludes = 'README*\npackage.json\nsrc/**\ntests/**\nmigrations/**';
 const defaultExcludes = 'node_modules/**\ndist/**\nbuild/**\n.cache/**\nlogs/**\n.env\nmodels/**\ndata/**';
 const busy = ref(false);
+const profileEditing = ref(false);
+const profileDraft = ref(props.project.description);
+const profileBaseline = ref(props.project.description);
+function startProfileEdit() {
+  profileBaseline.value = props.project.description;
+  profileDraft.value = props.project.description;
+  profileEditing.value = true;
+}
+async function saveProjectDescription() {
+  busy.value = true;
+  try {
+    await api<Project>(`/api/projects/${props.projectId}`, {
+      method: 'PATCH', body: JSON.stringify({ description: profileDraft.value.trim(), expectedDescription: profileBaseline.value }),
+    });
+    profileEditing.value = false;
+    emit('notice', '项目简介已更新。');
+    emit('refresh');
+  } catch (error) { emit('error', error instanceof Error ? error.message : '更新项目简介失败'); }
+  finally { busy.value = false; }
+}
 const pickingFolder = ref(false);
 const showSourceDialog = ref(false);
 const showAnalysisDialog = ref(false);
@@ -186,6 +206,17 @@ function formatSnapshot(snapshot: unknown) { return JSON.stringify(snapshot, nul
       </div>
     </header>
 
+    <section class="source-project-summary" aria-label="项目简介">
+      <div class="source-project-summary-head"><div><span>PROJECT PROFILE</span><h2>项目简介</h2></div>
+        <button v-if="!profileEditing" class="secondary-button" type="button" @click="startProfileEdit">编辑简介</button></div>
+      <p v-if="!profileEditing">{{ project.description || '暂无简介' }}</p>
+      <form v-else @submit.prevent="saveProjectDescription">
+        <label for="project-profile-description">一句话说明项目目标、现行路径与尚待验证的边界</label>
+        <textarea id="project-profile-description" v-model="profileDraft" maxlength="1000" rows="4" required></textarea>
+        <footer><span>{{ profileDraft.length }} / 1000</span><div><button class="secondary-button" type="button" @click="profileEditing = false">取消</button><button class="primary-button" type="submit" :disabled="busy || !profileDraft.trim()">保存简介</button></div></footer>
+      </form>
+    </section>
+
     <div v-if="sources.length" class="source-table">
       <div class="source-table-head"><span>源码</span><span>位置</span><span>类型</span><span>状态</span><span>最近分析</span><span></span></div>
       <template v-for="source in sources" :key="source.id">
@@ -298,4 +329,15 @@ function formatSnapshot(snapshot: unknown) { return JSON.stringify(snapshot, nul
 .analysis-result-summary { grid-column: 1 / -1; margin: 0; padding: 11px 13px; border-left: 3px solid var(--primary); background: var(--primary-subtle); color: var(--ink-secondary); line-height: 1.55; }
 .analysis-findings { grid-column: 1 / -1; display: grid; gap: 8px; }
 .analysis-findings details { padding: 10px 12px; border: 1px solid var(--line); background: var(--surface); }
+.source-project-summary { min-width: 0; padding: 18px 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.source-project-summary-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.source-project-summary-head span { color: var(--primary); font: 700 10px/1.4 var(--mono); letter-spacing: .08em; }
+.source-project-summary h2 { margin: 3px 0 0; font-size: 16px; }
+.source-project-summary > p { margin: 13px 0 0; color: var(--ink-secondary); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.source-project-summary form { display: grid; gap: 9px; margin-top: 14px; }
+.source-project-summary label { color: var(--ink-secondary); font-size: 12px; font-weight: 600; }
+.source-project-summary textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--ink); font-family: inherit; font-size: 13px; line-height: 1.6; resize: vertical; }
+.source-project-summary footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; }
+.source-project-summary footer > div { display: flex; gap: 8px; }
+@media (max-width: 700px) { .source-project-summary { padding: 14px; } .source-project-summary footer { align-items: flex-start; flex-direction: column; } }
 </style>

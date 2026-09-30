@@ -1,0 +1,12 @@
+[
+  {
+    "projectKey": "STREAMFUSION_AI",
+    "id": "d03b1e52-1694-4b35-927f-078ec8a3a4f6",
+    "description": "连续视频分析平台，目标是贯通视频源、场景、节点、任务、事件与媒体证据。当前管理端的身份、权限、审计等能力已在源码实现；Node Agent 与 Runtime 仅有基础服务，真实视频推理和事件闭环仍需实现与验证。"
+  },
+  {
+    "projectKey": "SALARY",
+    "id": "62c318b4-045b-40a1-8c2a-030d203c35d7",
+    "description": "个人工资档案工具。Windows 从用户已展开的飞书工资页采集可访问文本，双端共享工资核算、档案和原始截图，并提供 JSON/WebDAV 同步。相关代码已实现；Android 真机升级和真实坚果云双端往返仍待验证。"
+  }
+]

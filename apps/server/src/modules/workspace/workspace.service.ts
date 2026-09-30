@@ -436,6 +436,15 @@ export class WorkspaceService {
     return this.repository.listProjects().map(projectView);
   }
 
+  updateProjectDescription(projectId: string, input: { description: string; expectedDescription: string }): Project {
+    const current = this.requireProject(projectId);
+    if (current.description !== input.expectedDescription
+      || this.repository.updateProject(projectId, { description: input.description }, input.expectedDescription) !== 1) {
+      throw new ApiError(409, 'PROJECT_DESCRIPTION_CONFLICT', '项目描述已变化，请刷新后重试');
+    }
+    return projectView({ ...current, description: input.description });
+  }
+
   listProjectSources(projectId: string): ProjectSource[] {
     this.requireProject(projectId);
     return this.repository.listProjectSources(projectId).map(projectSourceView);

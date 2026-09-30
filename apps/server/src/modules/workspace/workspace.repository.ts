@@ -26,8 +26,10 @@ export class WorkspaceRepository {
     return this.connection.db.select().from(projects).where(eq(projects.id, id)).get();
   }
 
-  updateProject(id: string, values: Partial<typeof projects.$inferInsert>) {
-    return this.connection.db.update(projects).set(values).where(eq(projects.id, id)).run().changes;
+  updateProject(id: string, values: Partial<typeof projects.$inferInsert>, expectedDescription?: string) {
+    return this.connection.db.update(projects).set(values)
+      .where(expectedDescription === undefined ? eq(projects.id, id)
+        : and(eq(projects.id, id), eq(projects.description, expectedDescription))).run().changes;
   }
 
   insertProjectSource(source: typeof projectSources.$inferInsert) {

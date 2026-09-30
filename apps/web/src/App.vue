@@ -12,6 +12,7 @@ import SourceIntegration from './components/SourceIntegration.vue';
 import TestingWorkspace from './components/TestingWorkspace.vue';
 import ProjectArchive from './components/ProjectArchive.vue';
 import ProjectMaterials from './components/ProjectMaterials.vue';
+import ProjectMap from './components/ProjectMap.vue';
 import StorageSettings from './components/StorageSettings.vue';
 import UpdateSettings from './components/UpdateSettings.vue';
 import ArchiveRestore from './components/ArchiveRestore.vue';
@@ -19,7 +20,7 @@ import Icon from './components/Icon.vue';
 import { api, ApiRequestError } from './api-client';
 import './app.css';
 
-type WorkspacePage = 'projects' | 'overview' | 'materials' | 'background' | 'research' | 'requirements' | 'architecture' | 'technology'
+type WorkspacePage = 'projects' | 'overview' | 'map' | 'materials' | 'background' | 'research' | 'requirements' | 'architecture' | 'technology'
   | 'sources' | 'features' | 'feature-detail' | 'planning' | 'development' | 'testing' | 'ai' | 'history' | 'document' | 'archive' | 'records';
 type DocumentPage = 'background' | 'research' | 'requirements' | 'architecture' | 'technology' | 'document';
 type RevisionActivity = SpecificationRevisionSummary & { specification: SpecificationSummary };
@@ -31,6 +32,10 @@ type ProjectSourceDraft = {
 const projects = ref<Project[]>([]);
 const projectCardMeta = ref<Record<string, { updatedAt: string; modules?: number; features?: number; capabilities?: number }>>({});
 const projectDetail = ref<ProjectDetail | null>(null);
+const architectureMapMarkdown = ref<string | null>(null);
+const architectureMapRevision = ref<string | null>(null);
+const architectureMapLoading = ref(false);
+const architectureMapError = ref('');
 const specificationDetail = ref<SpecificationDetail | null>(null);
 const revisions = ref<SpecificationRevisionSummary[]>([]);
 const selectedRevision = ref<SpecificationRevision | null>(null);
@@ -193,6 +198,7 @@ const navSections: NavSection[] = [
     title: '工作区',
     items: [
       { id: 'overview', label: '概览', icon: 'overview' },
+      { id: 'map', label: '项目全景图', icon: 'map' },
       { id: 'features', label: '功能清单', icon: 'features' },
       { id: 'materials', label: '资料总览', icon: 'archive' },
       { id: 'records', label: '工作记录', icon: 'records' },
@@ -551,6 +557,11 @@ function inlineMarkdown(value: string) {
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\*([^*]+)\*/g, '<em>$1</em>')
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
 }
+function documentReadingContent(markdown: string) {
+  if (workspacePage.value !== 'architecture') return markdown;
+  return markdown.replace(/^[ \t]*```forgeflow-map[ \t]*\r?\n[\s\S]*?^[ \t]*```[ \t]*$/gm,
+    '> 本版交互图已收录在「项目全景图」。编辑版本时可查看完整图谱数据。');
+}
 function renderMarkdown(markdown: string) {
   const output: string[] = []; let paragraph: string[] = []; let listType: 'ul' | 'ol' | null = null;
   let inCode = false; let code: string[] = []; let headingIndex = 0;
@@ -642,6 +653,23 @@ async function refreshCurrentProject() {
     modules: projectDetail.value.modules.length, features: projectDetail.value.features.length,
     capabilities: projectDetail.value.capabilities.length };
 }
+let architectureMapLoadId = 0;
+async function loadArchitectureMap() {
+  const loadId = ++architectureMapLoadId;
+  const projectId = selectedProjectId.value;
+  const spec = projectDetail.value?.specifications.find((item) => item.featureId === null && item.kind === 'architecture');
+  architectureMapMarkdown.value = null; architectureMapRevision.value = null; architectureMapError.value = '';
+  if (!projectId || !spec) return;
+  architectureMapLoading.value = true;
+  try {
+    const detail = await api<SpecificationDetail>(`/api/projects/${projectId}/specifications/${spec.id}`);
+    if (selectedProjectId.value !== projectId || loadId !== architectureMapLoadId) return;
+    architectureMapMarkdown.value = detail.latestRevision?.content ?? null;
+    architectureMapRevision.value = detail.latestRevision ? `REV ${detail.latestRevision.revisionNo}` : null;
+  } catch (cause) {
+    if (selectedProjectId.value === projectId && loadId === architectureMapLoadId) architectureMapError.value = cause instanceof Error ? cause.message : '读取架构资料失败';
+  } finally { if (loadId === architectureMapLoadId) architectureMapLoading.value = false; }
+}
 let lastDataRefresh = 0;
 async function refreshVisibleData(manual = true) {
   if (appView.value === 'loading' || (!manual && ['archive', 'records'].includes(workspacePage.value))) return;
@@ -656,6 +684,7 @@ async function refreshVisibleData(manual = true) {
     else if (selectedProjectId.value) {
       await refreshCurrentProject();
       if (selectedSpecId.value && documentMode.value === 'read') await loadSpecification(selectedSpecId.value);
+      if (workspacePage.value === 'map') await loadArchitectureMap();
       refreshEpoch.value++;
     } else await loadWorkspace();
     lastDataRefresh = Date.now();
@@ -670,6 +699,8 @@ let refreshInterval: number | undefined;
 async function selectProject(id: string) {
   if (archiveView.value && !archiveView.value.canLeave()) return;
   clearMessage(); busy.value = true; selectedProjectId.value = id; selectedSpecId.value = null; archiveDocumentId.value = null;
+  architectureMapLoadId++;
+  architectureMapMarkdown.value = null; architectureMapRevision.value = null; architectureMapError.value = ''; architectureMapLoading.value = false;
   specificationDetail.value = null; selectedRevision.value = null; revisions.value = []; projectActivity.value = [];
   try { await refreshCurrentProject(); featureSearch.value = ''; featureSearchInput.value = ''; featureModuleFilter.value = ''; expandedBoardColumns.value = new Set(); workspacePage.value = 'features'; mobileNavOpen.value = false; }
   catch (cause) { showError(cause); } finally { busy.value = false; }
@@ -696,6 +727,7 @@ function navigate(page: WorkspacePage) {
   if (['background', 'research', 'requirements', 'architecture', 'technology'].includes(page)) { void openDocumentPage(page as DocumentPage); return; }
   if (page === 'archive') archiveDocumentId.value = null;
   workspacePage.value = page;
+  if (page === 'map') void loadArchitectureMap();
   if (page === 'ai' && !selectedRun.value) selectedRun.value = sortedRuns.value[0] ?? null;
 }
 function openOtherMaterial(spec: SpecificationSummary) {
@@ -1234,7 +1266,7 @@ onMounted(async () => {
       await selectProject(requestedProject.id);
       const requestedFeature = projectDetail.value?.features.find((item) => item.code === query.get('feature'));
       if (requestedFeature) await openFeature(requestedFeature);
-      else if (query.get('view') && ['overview', 'research', 'requirements', 'architecture', 'technology', 'sources', 'features', 'planning', 'development', 'testing', 'ai', 'history'].includes(query.get('view')!)) navigate(query.get('view') as WorkspacePage);
+      else if (query.get('view') && ['overview', 'map', 'research', 'requirements', 'architecture', 'technology', 'sources', 'features', 'planning', 'development', 'testing', 'ai', 'history'].includes(query.get('view')!)) navigate(query.get('view') as WorkspacePage);
     }
     appView.value = 'workspace';
   } catch (cause) { health.value = '连接失败'; appView.value = 'workspace'; showError(cause); }
@@ -1442,11 +1474,18 @@ onUnmounted(() => {
             </div>
           </template>
 
+          <template v-if="workspacePage === 'map'">
+            <div class="map-page-actions"><button class="secondary-button" type="button" @click="navigate('architecture')">查看架构资料</button></div>
+            <p v-if="architectureMapLoading" class="map-read-state" role="status">正在读取架构版本…</p>
+            <p v-else-if="architectureMapError" class="map-read-state error" role="alert">{{ architectureMapError }}</p>
+            <ProjectMap :detail="projectDetail" :architecture-markdown="architectureMapMarkdown" :architecture-revision="architectureMapRevision" @open-feature="openFeature" />
+          </template>
+
           <ProjectMaterials v-if="workspacePage === 'materials'" :key="refreshEpoch" :project-id="currentProject.id" :specifications="projectDetail.specifications"
             :features="projectDetail.features" :capabilities="projectDetail.capabilities" @open-specification="openOtherMaterial"
             @open-document="openArchiveDocument" @open-capability="openFeature" />
 
-          <SourceIntegration v-if="workspacePage === 'sources'" :key="refreshEpoch" :project-id="currentProject.id" :sources="projectDetail.sources" :analyses="projectDetail.sourceAnalyses"
+          <SourceIntegration v-if="workspacePage === 'sources'" :key="currentProject.id" :project="currentProject" :project-id="currentProject.id" :sources="projectDetail.sources" :analyses="projectDetail.sourceAnalyses"
             @refresh="refreshCurrentProject" @notice="notice = $event; error = ''" @error="error = $event; notice = ''" />
 
           <template v-if="isDocumentPage">
@@ -1455,6 +1494,7 @@ onUnmounted(() => {
                 <h1>{{ activeDocumentPage === 'document' && currentSpecification ? currentSpecification.title : activeDocumentConfig.title }}</h1>
               </div>
               <div v-if="currentSpecification" class="document-actions">
+                <button v-if="workspacePage === 'architecture'" class="secondary-button" type="button" @click="navigate('map')">查看项目全景图</button>
                 <button class="primary-button" type="button" @click="startRevision">创建新版本</button>
               </div>
               <div v-else-if="activeDocumentConfig.kind" class="document-actions">
@@ -1475,7 +1515,7 @@ onUnmounted(() => {
             <template v-else>
               <section v-if="currentRevision && currentProject.workflowMode === 'CONTROLLED'" class="baseline-bar" :class="{ warning: currentSpecification.latestRevisionId !== currentSpecification.approvedRevisionId }"><div class="baseline-facts"><span><small>当前正式版本</small><strong>{{ approvedRevision ? `REV ${approvedRevision.revisionNo}` : '尚未批准' }}</strong></span><span><small>最新版本</small><strong>REV {{ currentRevision.revisionNo }}</strong></span><span><small>状态</small><strong>{{ currentSpecification.latestRevisionId === currentSpecification.approvedRevisionId ? '已批准' : reviewStatusName(currentRevisionReview?.status ?? null) }}</strong></span></div><div class="baseline-actions"><button v-if="currentSpecification.latestRevisionId !== currentSpecification.approvedRevisionId" class="secondary-button" type="button" @click="showRevisionDiff">查看变更</button><button v-if="!currentRevisionReview" class="primary-button" type="button" :disabled="busy" @click="submitDesignReview">提交评审</button><template v-if="currentRevisionReview?.status === 'PENDING'"><button class="primary-button" type="button" :disabled="busy" @click="approveDesignReview(currentRevisionReview)">批准</button><button class="secondary-button" type="button" :disabled="busy" @click="requestDesignChanges">要求修改</button></template></div></section>
               <section v-if="reviewDiffVisible && currentRevision" class="surface revision-diff"><div class="surface-heading"><div><span class="section-index">DIFF</span><h2>REV {{ currentRevision.revisionNo }} 变更</h2></div><span class="surface-note">对比 {{ diffBaseRevision ? `REV ${diffBaseRevision.revisionNo}` : '空内容' }}</span></div><div class="diff-legend"><span class="added">新增</span><span class="removed">删除</span><span>未变化</span></div><pre><span v-for="(line, index) in revisionDiff" :key="index" :class="`diff-line ${line.kind}`"><i>{{ line.oldLine ?? '' }}</i><i>{{ line.newLine ?? '' }}</i><b>{{ line.kind === 'added' ? '+' : line.kind === 'removed' ? '−' : ' ' }}</b><code>{{ line.text || ' ' }}</code></span></pre></section>
-              <div v-else-if="documentMode === 'read'" class="document-workbench"><article class="surface document-reader"><div class="document-statusbar"><div><span class="status-tag planning">{{ selectedRevision?.id === approvedRevision?.id ? '正式基线' : '工作草稿' }}</span><strong>{{ selectedRevision ? `REV ${selectedRevision.revisionNo}` : '尚无版本' }}</strong><span v-if="selectedRevision?.id === currentRevision?.id">当前版本</span><span v-else-if="selectedRevision">历史版本 · 只读</span></div><small v-if="selectedRevision">{{ sourceName(selectedRevision.source) }} · {{ formatTime(selectedRevision.createdAt) }}</small></div><section v-if="workspacePage === 'technology' && technologySummary.length" class="technology-decisions-summary"><div class="technology-summary-head"><span>类别</span><span>选择</span><span>用途与原因</span><span>状态</span></div><div v-for="item in technologySummary" :key="`${item.category}-${item.choice}`" class="technology-decision"><span>{{ item.category }}</span><strong>{{ item.choice }}</strong><p>{{ [item.purpose, item.reason, item.alternatives && `替代：${item.alternatives}`].filter(Boolean).join(' · ') || '详细说明见正文' }}</p><b>{{ item.status || '—' }}</b></div></section><div v-if="selectedRevision" class="markdown-body" v-html="renderMarkdown(selectedRevision.content)"></div><div v-else class="empty-state document-empty"><span>R0</span><h3>尚未创建初版</h3><button class="primary-button" type="button" @click="startRevision">创建初版</button></div></article><aside class="surface version-rail"><div class="surface-heading"><div><span class="section-index">REV</span><h2>版本历史</h2></div><span class="count-label">{{ revisions.length }}</span></div><div v-if="revisions.length" class="revision-list"><button v-for="revision in revisions" :key="revision.id" type="button" :class="{ active: selectedRevision?.id === revision.id }" @click="selectHistory(revision.id)"><span class="revision-number">R{{ revision.revisionNo }}</span><span><strong>{{ revision.changeSummary }}</strong><small>{{ formatTime(revision.createdAt) }}</small></span><b>{{ revision.id === currentRevision?.id ? '当前' : '→' }}</b></button></div><div v-else class="empty-state compact"><span>R0</span><h3>暂无版本</h3></div></aside></div>
+              <div v-else-if="documentMode === 'read'" class="document-workbench"><article class="surface document-reader"><div class="document-statusbar"><div><span class="status-tag planning">{{ selectedRevision?.id === approvedRevision?.id ? '正式基线' : '工作草稿' }}</span><strong>{{ selectedRevision ? `REV ${selectedRevision.revisionNo}` : '尚无版本' }}</strong><span v-if="selectedRevision?.id === currentRevision?.id">当前版本</span><span v-else-if="selectedRevision">历史版本 · 只读</span></div><small v-if="selectedRevision">{{ sourceName(selectedRevision.source) }} · {{ formatTime(selectedRevision.createdAt) }}</small></div><section v-if="workspacePage === 'technology' && technologySummary.length" class="technology-decisions-summary"><div class="technology-summary-head"><span>类别</span><span>选择</span><span>用途与原因</span><span>状态</span></div><div v-for="item in technologySummary" :key="`${item.category}-${item.choice}`" class="technology-decision"><span>{{ item.category }}</span><strong>{{ item.choice }}</strong><p>{{ [item.purpose, item.reason, item.alternatives && `替代：${item.alternatives}`].filter(Boolean).join(' · ') || '详细说明见正文' }}</p><b>{{ item.status || '—' }}</b></div></section><div v-if="selectedRevision" class="markdown-body" v-html="renderMarkdown(documentReadingContent(selectedRevision.content))"></div><div v-else class="empty-state document-empty"><span>R0</span><h3>尚未创建初版</h3><button class="primary-button" type="button" @click="startRevision">创建初版</button></div></article><aside class="surface version-rail"><div class="surface-heading"><div><span class="section-index">REV</span><h2>版本历史</h2></div><span class="count-label">{{ revisions.length }}</span></div><div v-if="revisions.length" class="revision-list"><button v-for="revision in revisions" :key="revision.id" type="button" :class="{ active: selectedRevision?.id === revision.id }" @click="selectHistory(revision.id)"><span class="revision-number">R{{ revision.revisionNo }}</span><span><strong>{{ revision.changeSummary }}</strong><small>{{ formatTime(revision.createdAt) }}</small></span><b>{{ revision.id === currentRevision?.id ? '当前' : '→' }}</b></button></div><div v-else class="empty-state compact"><span>R0</span><h3>暂无版本</h3></div></aside></div>
               <div v-else class="revision-create-layout"><form class="surface revision-editor" @submit.prevent="createRevision"><div class="surface-heading"><div><h2>创建新版本</h2></div></div><div class="editor-fields"><label for="change-summary">变更摘要</label><input id="change-summary" v-model="draftSummary" maxlength="500" required placeholder="说明这次版本修改了什么" /><div class="field-row"><label for="markdown-content">Markdown 正文</label><span>{{ draftContent.length }} / 200000</span></div><textarea id="markdown-content" v-model="draftContent" maxlength="200000" required spellcheck="false"></textarea><div class="form-footer"><div></div><div><button class="secondary-button" type="button" @click="cancelRevision">取消</button><button class="primary-button" type="submit" :disabled="busy">保存新版本 <span>→</span></button></div></div></div></form><aside class="surface reference-panel"><div class="surface-heading"><div><h2>当前版本参考</h2></div></div><div class="reference-meta"><strong>{{ currentRevision ? `REV ${currentRevision.revisionNo}` : '尚无版本' }}</strong><span>{{ currentRevision?.changeSummary ?? '将创建初版' }}</span></div><pre>{{ currentRevision?.content ?? '当前没有可参考的版本正文。' }}</pre></aside></div>
             </template>
           </template>

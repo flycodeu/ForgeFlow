@@ -329,3 +329,59 @@ test('project creation defaults to AUTO without changing explicit CONTROLLED mod
   assert.equal(controlled.statusCode, 201);
   assert.equal(controlled.json<Project>().workflowMode, 'CONTROLLED');
 });
+
+test('project description updates require write access and the exact previous description', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'forgeflow-project-description-'));
+  const app = createApp(join(directory, 'forgeflow.db'));
+  t.after(async () => {
+    await app.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const initialized = await app.inject({ method: 'POST', url: '/api/auth/initialize', payload: {
+    username: 'owner', password: 'test-only-password-123',
+  } });
+  assert.equal(initialized.statusCode, 201);
+  const cookie = initialized.headers['set-cookie']?.toString().split(';')[0];
+  assert.ok(cookie);
+  const created = await app.inject({ method: 'POST', url: '/api/projects', headers: { cookie }, payload: {
+    projectKey: 'DESCRIPTION', name: '描述测试', description: '旧描述',
+  } });
+  assert.equal(created.statusCode, 201);
+  const project = created.json<Project>();
+  const path = `/api/projects/${project.id}`;
+  const readTokenResponse = await app.inject({ method: 'POST', url: '/api/ai-tokens', headers: { cookie }, payload: {
+    name: '只读', scopes: ['project:read'],
+  } });
+  assert.equal(readTokenResponse.statusCode, 201);
+  const readToken = readTokenResponse.json<CreatedAiToken>().token;
+  const forbidden = await app.inject({ method: 'PATCH', url: path, headers: { authorization: `Bearer ${readToken}` },
+    payload: { description: '不能写入', expectedDescription: '旧描述' } });
+  assert.equal(forbidden.statusCode, 403);
+
+  const writeTokenResponse = await app.inject({ method: 'POST', url: '/api/ai-tokens', headers: { cookie }, payload: {
+    name: '项目编辑', scopes: ['project:write'],
+  } });
+  assert.equal(writeTokenResponse.statusCode, 201);
+  const writeToken = writeTokenResponse.json<CreatedAiToken>().token;
+  const updated = await app.inject({ method: 'PATCH', url: path, headers: { authorization: `Bearer ${writeToken}` },
+    payload: { description: '  新描述  ', expectedDescription: '旧描述' } });
+  assert.equal(updated.statusCode, 200);
+  assert.deepEqual(updated.json<Project>(), { ...project, description: '新描述' });
+  assert.equal((await app.inject({ method: 'GET', url: '/api/projects', headers: { cookie } })).json<Project[]>()[0]?.description, '新描述');
+  assert.equal((await app.inject({ method: 'GET', url: path, headers: { cookie } })).json<ProjectDetail>().project.description, '新描述');
+
+  const patch = (payload: object) => app.inject({ method: 'PATCH', url: path, headers: { cookie }, payload });
+  const stale = await patch({ description: '旧窗口覆盖', expectedDescription: '旧描述' });
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.json<{ error: { code: string } }>().error.code, 'PROJECT_DESCRIPTION_CONFLICT');
+  for (const payload of [
+    { description: '缺少原文' },
+    { description: '原文类型错误', expectedDescription: null },
+    { description: '太长'.repeat(501), expectedDescription: '新描述' },
+    { description: '多改字段', expectedDescription: '新描述', name: '不能修改名称' },
+  ]) assert.equal((await patch(payload)).statusCode, 400);
+  assert.equal((await patch({ description: '', expectedDescription: '新描述' })).json<Project>().description, '');
+  assert.equal((await app.inject({ method: 'GET', url: path, headers: { cookie } })).json<ProjectDetail>().project.description, '');
+  assert.equal((await app.inject({ method: 'PATCH', url: '/api/projects/absent', headers: { cookie },
+    payload: { description: '不存在', expectedDescription: '' } })).statusCode, 404);
+});

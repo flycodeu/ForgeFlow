@@ -852,6 +852,7 @@ code, pre { font-family: var(--mono); }
   grid-template-columns: minmax(0, 1fr) 300px;
   gap: 20px;
   align-items: start;
+  min-width: 0;
 }
 .document-reader {
   min-width: 0;
@@ -885,6 +886,8 @@ code, pre { font-family: var(--mono); }
   color: var(--ink-secondary);
   font-size: 15px;
   line-height: 1.75;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .markdown-body h1 { font-size: 26px; font-weight: 700; color: var(--ink); margin: 0 0 20px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .markdown-body h2 { font-size: 20px; font-weight: 600; color: var(--ink); margin: 32px 0 14px; }
@@ -946,7 +949,7 @@ code, pre { font-family: var(--mono); }
 }
 .markdown-body tr:last-child td { border-bottom: 0; }
 
-.version-rail { background: var(--surface); }
+.version-rail { min-width: 0; background: var(--surface); }
 .revision-list { display: flex; flex-direction: column; }
 .revision-list button {
   display: flex;
@@ -2182,13 +2185,16 @@ code, pre { font-family: var(--mono); }
   .mobile-nav-toggle { display: inline-flex; }
   .overview-metrics { grid-template-columns: 1fr 1fr; }
   .overview-workbench { grid-template-columns: 1fr; }
-  .document-workbench { grid-template-columns: 1fr; }
+  .document-workbench { grid-template-columns: minmax(0, 1fr); }
   .run-workbench { grid-template-columns: 1fr; }
   .settings-grid { grid-template-columns: 1fr; }
   .main-workspace { padding: 20px 18px 40px; }
 }
 
 @media (max-width: 700px) {
+  .document-page-heading { flex-wrap: wrap; }
+  .document-actions { flex-wrap: wrap; flex-shrink: 1; }
+  .markdown-body { padding: 24px 18px 36px; }
   .topbar.has-project .brand-copy { display: none; }
   .topbar.has-project .brand { flex-shrink: 0; }
   .top-link { white-space: nowrap; flex-shrink: 0; }
@@ -2680,6 +2686,9 @@ code, pre { font-family: var(--mono); }
 .board-stage-summary span.active { border-color: var(--primary-border); color: var(--ink-secondary); }
 .board-stage-summary strong { font-weight: 700; }
 .board-stage-summary .board-status-dot { width: 6px; height: 6px; }
+.map-read-state { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+.map-read-state.error { color: var(--danger); }
+.map-page-actions { display: flex; justify-content: flex-end; margin-bottom: 4px; }
 
 .feature-toolbar-stats {
   font-size: 12.5px;

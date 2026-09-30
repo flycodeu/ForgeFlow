@@ -278,6 +278,20 @@ export function registerWorkspaceRoutes(app: FastifyInstance, service: Workspace
     return service.getProject(request.params.projectId);
   });
 
+  app.patch<{ Params: ProjectParams }>('/api/projects/:projectId', async (request) => {
+    await auth.require(request, 'project:write', true);
+    const body = bodyObject(request.body);
+    if (Object.keys(body).some((key) => key !== 'description' && key !== 'expectedDescription')) {
+      throw new ApiError(400, 'INVALID_INPUT', '只能修改项目描述');
+    }
+    const description = optionalTextField(body, 'description', '项目描述', 1000, true);
+    if (description === undefined || typeof body.expectedDescription !== 'string') {
+      throw new ApiError(400, 'INVALID_INPUT', '项目描述和原描述均为必填字符串');
+    }
+    return service.updateProjectDescription(request.params.projectId,
+      { description, expectedDescription: body.expectedDescription });
+  });
+
   app.delete<{ Params: ProjectParams }>('/api/projects/:projectId', async (request) => {
     await auth.require(request, 'owner', true);
     return service.deleteProject(request.params.projectId);

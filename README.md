@@ -53,7 +53,7 @@ CLI 可通过 `FORGEFLOW_URL` 显式指定本机服务地址，通过 `FORGEFLOW
 
 ## Windows 桌面版
 
-`apps/desktop/dist/ForgeFlow-Setup-0.1.0.exe` 为当前用户安装向导，可选择空的安装目录。当前不支持覆盖安装或自动升级；卸载后再安装，独立的数据目录保留。也可以使用 `apps/desktop/dist/ForgeFlow/ForgeFlow.exe` 便携版，但必须保留旁边的运行资源文件夹。两者均未签名，需要 WebView2。
+`apps/desktop/dist/ForgeFlow-Setup-0.2.1.exe` 为当前用户安装向导，可选择程序目录并覆盖已有 ForgeFlow 安装。自 0.2.0 起，安装版可在“系统设置 → 应用版本”检查正式 GitHub Release，显示下载进度，校验签名清单和安装包后自动安装重启。0.1.x 首次升级需手动运行新版安装包。业务数据目录与程序目录分离；安装包尚无 Windows Authenticode 签名，运行需要 WebView2。便携版须保留整个 `apps/desktop/dist/ForgeFlow` 目录。
 
 首次启动选择业务数据目录，设置中显示当前位置，可打开原生目录管理窗口。迁移会暂停后台服务、复制文件、比对 SHA-256、检查 SQLite 完整性并验证新服务启动，再保存位置。失败时恢复原目录服务，原文件不删除。目标必须为空的本地专用目录，不接受系统目录、安装目录、源目录的父子目录及符号链接；失败后的目标副本保留供检查。位置配置仍保存在 `%LOCALAPPDATA%\ForgeFlow\storage.json`，WebView2 缓存不属于业务数据目录。
 
