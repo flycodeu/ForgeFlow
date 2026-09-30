@@ -11,7 +11,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ openFeature: [feature: Feature, capabilityId?: string] }>();
 
-const view = ref<'structure' | 'architecture'>('structure');
+const view = ref<'structure' | 'architecture'>('architecture');
 const query = ref('');
 const selectedModuleId = ref('');
 const selectedFeatureId = ref('');
@@ -90,18 +90,18 @@ watch(() => props.detail.project.id, () => {
       <div>
         <span class="map-eyebrow">PROJECT ATLAS</span>
         <h1>项目全景图</h1>
-        <p>沿项目记录查看功能层级，沿架构文档查看已声明的模块交互。</p>
+        <p>先看最新架构修订中的模块交互，再对照项目的功能登记树。</p>
       </div>
       <div class="map-counts" aria-label="项目结构数量">
-        <span><strong>{{ detail.modules.length }}</strong> 模块</span>
-        <span><strong>{{ detail.features.length }}</strong> 功能</span>
-        <span><strong>{{ detail.capabilities.length }}</strong> 操作</span>
+        <span><strong>{{ detail.modules.length }}</strong> 登记模块</span>
+        <span><strong>{{ detail.features.length }}</strong> 登记功能</span>
+        <span><strong>{{ detail.capabilities.length }}</strong> 登记操作</span>
       </div>
     </header>
 
     <div class="map-toolbar">
       <div class="map-tabs" role="group" aria-label="全景图视图">
-        <button type="button" :aria-pressed="view === 'structure'" @click="changeView('structure')">功能结构</button>
+        <button type="button" :aria-pressed="view === 'structure'" @click="changeView('structure')">登记功能树</button>
         <button type="button" :aria-pressed="view === 'architecture'" @click="changeView('architecture')">交互与拓扑</button>
       </div>
       <label class="map-search">
@@ -112,7 +112,7 @@ watch(() => props.detail.project.id, () => {
     </div>
 
     <template v-if="view === 'structure'">
-      <p class="map-note">结构来自项目记录。功能与操作状态按记录展示，不等同于代码验证或负责人验收。</p>
+      <p class="map-note">这棵树保留项目的功能登记，可能包含早期或尚未迁移的规划项。现行方案请对照最新架构和项目资料；登记状态不等同于代码验证或负责人验收。</p>
       <div v-if="!detail.modules.length" class="map-empty">尚未记录模块。创建模块和功能后，这里会显示项目结构。</div>
       <div v-else-if="!matchingModules.length" class="map-empty">没有匹配的模块、功能或操作。</div>
       <div v-else class="structure-grid">

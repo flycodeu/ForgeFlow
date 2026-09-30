@@ -1478,7 +1478,7 @@ onUnmounted(() => {
             <div class="map-page-actions"><button class="secondary-button" type="button" @click="navigate('architecture')">查看架构资料</button></div>
             <p v-if="architectureMapLoading" class="map-read-state" role="status">正在读取架构版本…</p>
             <p v-else-if="architectureMapError" class="map-read-state error" role="alert">{{ architectureMapError }}</p>
-            <ProjectMap :detail="projectDetail" :architecture-markdown="architectureMapMarkdown" :architecture-revision="architectureMapRevision" @open-feature="openFeature" />
+            <ProjectMap v-if="!architectureMapLoading" :detail="projectDetail" :architecture-markdown="architectureMapMarkdown" :architecture-revision="architectureMapRevision" @open-feature="openFeature" />
           </template>
 
           <ProjectMaterials v-if="workspacePage === 'materials'" :key="refreshEpoch" :project-id="currentProject.id" :specifications="projectDetail.specifications"
