@@ -55,6 +55,12 @@ watch(() => [props.projectId, props.refreshKey], loadLifecycle);
         <em>{{ statusLabel(stage.status) }}</em>
       </button>
     </div>
+    <div v-if="lifecycle?.manualReview" class="review-coverage">
+      <span>当前能力本机复核</span>
+      <strong>通过 {{ lifecycle.manualReview.passed }}</strong>
+      <strong>未通过 {{ lifecycle.manualReview.failed }}</strong>
+      <small>按能力关联的最新执行记录统计；与功能验收标记分开，历史 CI 标记不计入。</small>
+    </div>
   </section>
 </template>
 
@@ -73,5 +79,8 @@ watch(() => [props.projectId, props.refreshKey], loadLifecycle);
 .lifecycle-step.issue em { color: var(--danger-ink); }
 .lifecycle-loading { padding: 12px; color: var(--muted); font-size: 13px; }
 .lifecycle-loading.issue { color: var(--danger-ink); }
+.review-coverage { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11.5px; }
+.review-coverage strong { color: var(--ink-secondary); font-weight: 600; }
+.review-coverage small { margin-left: auto; color: var(--muted); font-size: 11px; }
 @container (max-width: 660px) { .lifecycle-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>

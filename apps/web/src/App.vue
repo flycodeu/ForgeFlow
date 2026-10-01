@@ -18,6 +18,7 @@ import UpdateSettings from './components/UpdateSettings.vue';
 import ArchiveRestore from './components/ArchiveRestore.vue';
 import Icon from './components/Icon.vue';
 import { api, ApiRequestError } from './api-client';
+import { latestRun as latestExecution, runVerificationLabel, runVerificationTone, taskImplementationLabel } from './evidence-status';
 import './app.css';
 
 type WorkspacePage = 'projects' | 'overview' | 'map' | 'materials' | 'background' | 'research' | 'requirements' | 'architecture' | 'technology'
@@ -162,11 +163,18 @@ const kindNames: Record<string, string> = {
   background: '项目背景', research: '调研与分析', requirements: '需求分析', architecture: '架构设计', technology: '技术选型',
   delivery: '交付与验证', other: '其他项目级资料', 'feature-design': '功能 / 能力设计', 'capability-design': '能力项设计',
 };
+const projectDocumentWritingTips: Record<string, string> = {
+  background: '说明项目为何产生、原有问题和影响、服务对象、总体方案及形成过程；区分当前现状与目标，勿用更新日期和功能清单代替背景。',
+  research: '比较候选方案或公开做法，写清适用条件、限制、取舍结论，以及本项目下一步如何验证。',
+  requirements: '写明使用者、输入或操作、可观察的结果，并交代失败处理、约束或可核对的验收条件。',
+  architecture: '写出主要模块的职责、调用与数据流向、关键失败边界；区分当前已接通的链路和目标链路。',
+  technology: '列出实际依赖及用途和选择原因，再说明候选方案、采用条件或代价；区分已使用与待验证技术。',
+};
 const featureStatuses: { value: FeatureStatus; label: string }[] = [
   { value: 'DRAFT', label: '草稿' }, { value: 'DESIGNING', label: '设计中' },
   { value: 'READY', label: '待实施' }, { value: 'IMPLEMENTING', label: '实施中' },
   { value: 'VERIFYING', label: '验证中' }, { value: 'ACCEPTANCE_PENDING', label: '待验收' },
-  { value: 'ACCEPTED', label: '已验收' }, { value: 'DELIVERED', label: '交付标记（待核对）' },
+  { value: 'ACCEPTED', label: '已标记验收' }, { value: 'DELIVERED', label: '交付标记（待核对）' },
 ];
 const taskTypes: { value: TaskType; label: string }[] = [
   { value: 'DESIGN', label: '设计' }, { value: 'BACKEND', label: 'Backend' },
@@ -242,6 +250,8 @@ const navItems = computed(() => navSections.flatMap((section) => section.items.f
 
 const currentProject = computed(() => projectDetail.value?.project ?? null);
 const currentSpecification = computed(() => specificationDetail.value?.specification ?? null);
+const documentWritingTip = computed(() => currentSpecification.value && currentSpecification.value.featureId === null
+  ? projectDocumentWritingTips[currentSpecification.value.kind] : null);
 const currentRevision = computed(() => specificationDetail.value?.latestRevision ?? null);
 const approvedRevision = computed(() => specificationDetail.value?.approvedRevision ?? null);
 const currentRevisionReview = computed(() => specificationDetail.value?.reviews.find((item) => item.revisionId === currentRevision.value?.id) ?? null);
@@ -332,28 +342,28 @@ function tasksForFeature(featureId: string) { return projectDetail.value?.tasks.
 function capabilitiesForFeature(featureId: string) { return projectDetail.value?.capabilities.filter((item) => item.featureId === featureId) ?? []; }
 function tasksForCapability(capabilityId: string) { return projectDetail.value?.tasks.filter((item) => item.capabilityId === capabilityId) ?? []; }
 function capabilityStatusName(status: Capability['status']) {
-  return ({ DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中', TESTING: '验证中', DONE: '已完成', BLOCKED: '受阻' })[status];
+  return ({ DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中', TESTING: '验证中', DONE: '标记完成', BLOCKED: '受阻' })[status];
 }
 function capabilityDesignLabel(capability: Capability) { return capability.status === 'DRAFT' ? '待设计' : '已定义'; }
 function capabilityImplementationLabel(capability: Capability) {
   const tasks = tasksForCapability(capability.id);
   if (!tasks.length) {
-    if (capability.status === 'DONE' || capability.status === 'TESTING') return '已实现';
+    if (capability.status === 'DONE' || capability.status === 'TESTING') return '状态已登记，缺实施证据';
     if (capability.status === 'IMPLEMENTING') return '实现中';
     if (capability.status === 'BLOCKED') return '受阻';
     return '待规划';
   }
-  const done = tasks.filter((item) => item.status === 'DONE' || item.status === 'CONFIRMED').length;
-  return `${done}/${tasks.length} 任务`;
+  const taskIds = new Set(tasks.map((task) => task.id));
+  return taskImplementationLabel(tasks, (projectDetail.value?.runs ?? []).filter((run) => taskIds.has(run.taskId)));
 }
 function capabilityVerificationLabel(capabilityId: string) {
-  const taskIds = new Set(tasksForCapability(capabilityId).map((item) => item.id));
-  const run = (projectDetail.value?.runs ?? [])
-    .filter((item) => taskIds.has(item.taskId))
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  const run = latestRunForCapability(capabilityId);
   if (!run) return '未登记验证';
-  const label = verificationLabel(run);
-  return label === '—' ? '未登记验证' : label;
+  return verificationLabel(run);
+}
+function latestRunForCapability(capabilityId: string) {
+  const taskIds = new Set(tasksForCapability(capabilityId).map((item) => item.id));
+  return latestExecution((projectDetail.value?.runs ?? []).filter((item) => taskIds.has(item.taskId)));
 }
 function featureDesignLabel(featureId: string) {
   const design = projectDetail.value?.specifications.find((item) => item.featureId === featureId && item.kind === 'feature-design');
@@ -365,20 +375,21 @@ function featureImplementationLabel(featureId: string) {
   const tasks = tasksForFeature(featureId);
   if (!tasks.length) {
     const capabilities = capabilitiesForFeature(featureId);
-    if (capabilities.length && capabilities.every((item) => item.status === 'DONE')) return '代码已实现';
-    if (capabilities.some((item) => item.status === 'DONE')) return '部分已实现';
+    if (capabilities.some((item) => item.status === 'DONE')) return '状态已登记，缺实施证据';
     return '未登记任务';
   }
-  const done = tasks.filter((item) => item.status === 'DONE' || item.status === 'CONFIRMED').length;
-  return `${done}/${tasks.length} 任务`;
+  return taskImplementationLabel(tasks, (projectDetail.value?.runs ?? []).filter((run) => run.featureId === featureId));
 }
 function featureVerificationLabel(featureId: string) {
-  const runs = (projectDetail.value?.runs ?? [])
-    .filter((item) => item.featureId === featureId)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  if (!runs[0]) return '未登记验证';
-  const label = verificationLabel(runs[0]);
-  return label === '—' ? '未登记验证' : label;
+  const run = latestRunForFeature(featureId);
+  return run ? verificationLabel(run) : '未登记验证';
+}
+function latestRunForFeature(featureId: string) {
+  return latestExecution((projectDetail.value?.runs ?? []).filter((item) => item.featureId === featureId));
+}
+function featureVerificationTone(featureId: string) {
+  const run = latestRunForFeature(featureId);
+  return run ? runVerificationTone(run) : '';
 }
 function featureStatusDisplay(feature: Feature) {
   return feature.status === 'VERIFYING' && !projectDetail.value?.runs.some((run) => run.featureId === feature.id)
@@ -409,7 +420,7 @@ const featureBoardColumns = [
   { key: 'READY', label: '待实施', color: 'dot-ready', statuses: ['READY'] },
   { key: 'IMPLEMENTING', label: '实现中', color: 'dot-impl', statuses: ['IMPLEMENTING'] },
   { key: 'VERIFYING', label: '核验 / 待验收', color: 'dot-ready', statuses: ['VERIFYING', 'ACCEPTANCE_PENDING'] },
-  { key: 'ACCEPTED', label: '已验收', color: 'dot-done', statuses: ['ACCEPTED'] },
+  { key: 'ACCEPTED', label: '验收标记', color: 'dot-done', statuses: ['ACCEPTED'] },
   { key: 'DELIVERED', label: '历史交付标记', color: 'dot-ready', statuses: ['DELIVERED'] },
 ];
 
@@ -428,7 +439,7 @@ function toggleBoardColumn(key: string) {
 }
 
 function statusBadgeClass(status: string) {
-  if (status === 'ACCEPTED') return 'pass';
+  if (status === 'ACCEPTED') return 'recorded';
   if (['IMPLEMENTING', 'READY'].includes(status)) return 'active';
   if (status === 'DESIGNING') return 'design';
   return '';
@@ -528,12 +539,7 @@ function runNumber(run: AiRun) {
 function runStatusName(status: AiRun['status']) { return ({ RUNNING: '执行中', SUBMITTED: '已提交', FAILED: '失败', ABORTED: '已中断' })[status]; }
 function runFileLabel(file: AiRun['changedFiles'][number]) { return typeof file === 'string' ? file : `${file.sourceId.slice(0, 8)} · ${file.relativePath}`; }
 function verificationLabel(run: AiRun) {
-  const verification = run.verificationSummary;
-  if (!verification) return '—';
-  if (verification.origin === 'AI_REPORTED') return verification.reportedStatus === 'PASS' ? 'AI报告通过' : `AI报告${verification.reportedStatus}`;
-  if (verification.origin === 'LOCAL_CAPTURED') return verification.reportedStatus === 'PASS' ? '本地证据通过' : `本地证据：${verification.reportedStatus}`;
-  if (verification.origin === 'HUMAN') return verification.reportedStatus === 'PASS' ? '人工验收通过' : `人工验收：${verification.reportedStatus}`;
-  return `CI：${verification.reportedStatus}`;
+  return runVerificationLabel(run);
 }
 function runPhaseName(phase: RunPhase) { return ({ PREPARING: '准备', IMPLEMENTING: '实施', TESTING: '验证', SUBMITTING: '提交' })[phase]; }
 function featureDisplayName(featureId: string) { return projectDetail.value?.features.find((item) => item.id === featureId)?.name ?? '未知功能'; }
@@ -1516,7 +1522,20 @@ onUnmounted(() => {
               <section v-if="currentRevision && currentProject.workflowMode === 'CONTROLLED'" class="baseline-bar" :class="{ warning: currentSpecification.latestRevisionId !== currentSpecification.approvedRevisionId }"><div class="baseline-facts"><span><small>当前正式版本</small><strong>{{ approvedRevision ? `REV ${approvedRevision.revisionNo}` : '尚未批准' }}</strong></span><span><small>最新版本</small><strong>REV {{ currentRevision.revisionNo }}</strong></span><span><small>状态</small><strong>{{ currentSpecification.latestRevisionId === currentSpecification.approvedRevisionId ? '已批准' : reviewStatusName(currentRevisionReview?.status ?? null) }}</strong></span></div><div class="baseline-actions"><button v-if="currentSpecification.latestRevisionId !== currentSpecification.approvedRevisionId" class="secondary-button" type="button" @click="showRevisionDiff">查看变更</button><button v-if="!currentRevisionReview" class="primary-button" type="button" :disabled="busy" @click="submitDesignReview">提交评审</button><template v-if="currentRevisionReview?.status === 'PENDING'"><button class="primary-button" type="button" :disabled="busy" @click="approveDesignReview(currentRevisionReview)">批准</button><button class="secondary-button" type="button" :disabled="busy" @click="requestDesignChanges">要求修改</button></template></div></section>
               <section v-if="reviewDiffVisible && currentRevision" class="surface revision-diff"><div class="surface-heading"><div><span class="section-index">DIFF</span><h2>REV {{ currentRevision.revisionNo }} 变更</h2></div><span class="surface-note">对比 {{ diffBaseRevision ? `REV ${diffBaseRevision.revisionNo}` : '空内容' }}</span></div><div class="diff-legend"><span class="added">新增</span><span class="removed">删除</span><span>未变化</span></div><pre><span v-for="(line, index) in revisionDiff" :key="index" :class="`diff-line ${line.kind}`"><i>{{ line.oldLine ?? '' }}</i><i>{{ line.newLine ?? '' }}</i><b>{{ line.kind === 'added' ? '+' : line.kind === 'removed' ? '−' : ' ' }}</b><code>{{ line.text || ' ' }}</code></span></pre></section>
               <div v-else-if="documentMode === 'read'" class="document-workbench"><article class="surface document-reader"><div class="document-statusbar"><div><span class="status-tag planning">{{ selectedRevision?.id === approvedRevision?.id ? '正式基线' : '工作草稿' }}</span><strong>{{ selectedRevision ? `REV ${selectedRevision.revisionNo}` : '尚无版本' }}</strong><span v-if="selectedRevision?.id === currentRevision?.id">当前版本</span><span v-else-if="selectedRevision">历史版本 · 只读</span></div><small v-if="selectedRevision">{{ sourceName(selectedRevision.source) }} · {{ formatTime(selectedRevision.createdAt) }}</small></div><section v-if="workspacePage === 'technology' && technologySummary.length" class="technology-decisions-summary"><div class="technology-summary-head"><span>类别</span><span>选择</span><span>用途与原因</span><span>状态</span></div><div v-for="item in technologySummary" :key="`${item.category}-${item.choice}`" class="technology-decision"><span>{{ item.category }}</span><strong>{{ item.choice }}</strong><p>{{ [item.purpose, item.reason, item.alternatives && `替代：${item.alternatives}`].filter(Boolean).join(' · ') || '详细说明见正文' }}</p><b>{{ item.status || '—' }}</b></div></section><div v-if="selectedRevision" class="markdown-body" v-html="renderMarkdown(documentReadingContent(selectedRevision.content))"></div><div v-else class="empty-state document-empty"><span>R0</span><h3>尚未创建初版</h3><button class="primary-button" type="button" @click="startRevision">创建初版</button></div></article><aside class="surface version-rail"><div class="surface-heading"><div><span class="section-index">REV</span><h2>版本历史</h2></div><span class="count-label">{{ revisions.length }}</span></div><div v-if="revisions.length" class="revision-list"><button v-for="revision in revisions" :key="revision.id" type="button" :class="{ active: selectedRevision?.id === revision.id }" @click="selectHistory(revision.id)"><span class="revision-number">R{{ revision.revisionNo }}</span><span><strong>{{ revision.changeSummary }}</strong><small>{{ formatTime(revision.createdAt) }}</small></span><b>{{ revision.id === currentRevision?.id ? '当前' : '→' }}</b></button></div><div v-else class="empty-state compact"><span>R0</span><h3>暂无版本</h3></div></aside></div>
-              <div v-else class="revision-create-layout"><form class="surface revision-editor" @submit.prevent="createRevision"><div class="surface-heading"><div><h2>创建新版本</h2></div></div><div class="editor-fields"><label for="change-summary">变更摘要</label><input id="change-summary" v-model="draftSummary" maxlength="500" required placeholder="说明这次版本修改了什么" /><div class="field-row"><label for="markdown-content">Markdown 正文</label><span>{{ draftContent.length }} / 200000</span></div><textarea id="markdown-content" v-model="draftContent" maxlength="200000" required spellcheck="false"></textarea><div class="form-footer"><div></div><div><button class="secondary-button" type="button" @click="cancelRevision">取消</button><button class="primary-button" type="submit" :disabled="busy">保存新版本 <span>→</span></button></div></div></div></form><aside class="surface reference-panel"><div class="surface-heading"><div><h2>当前版本参考</h2></div></div><div class="reference-meta"><strong>{{ currentRevision ? `REV ${currentRevision.revisionNo}` : '尚无版本' }}</strong><span>{{ currentRevision?.changeSummary ?? '将创建初版' }}</span></div><pre>{{ currentRevision?.content ?? '当前没有可参考的版本正文。' }}</pre></aside></div>
+              <div v-else class="revision-create-layout">
+                <form class="surface revision-editor" @submit.prevent="createRevision">
+                  <div class="surface-heading"><div><h2>创建新版本</h2></div></div>
+                  <div class="editor-fields">
+                    <label for="change-summary">变更摘要</label>
+                    <input id="change-summary" v-model="draftSummary" maxlength="500" required placeholder="说明这次版本修改了什么" />
+                    <p v-if="documentWritingTip" class="document-writing-hint"><strong>写作检查</strong>{{ documentWritingTip }}正文还需写明可回查的来源（源码或文档路径、链接、工单、带日期的访谈记录），避免一句概述。</p>
+                    <div class="field-row"><label for="markdown-content">Markdown 正文</label><span>{{ draftContent.length }} / 200000</span></div>
+                    <textarea id="markdown-content" v-model="draftContent" maxlength="200000" required spellcheck="false"></textarea>
+                    <div class="form-footer"><div></div><div><button class="secondary-button" type="button" @click="cancelRevision">取消</button><button class="primary-button" type="submit" :disabled="busy">保存新版本 <span>→</span></button></div></div>
+                  </div>
+                </form>
+                <aside class="surface reference-panel"><div class="surface-heading"><div><h2>当前版本参考</h2></div></div><div class="reference-meta"><strong>{{ currentRevision ? `REV ${currentRevision.revisionNo}` : '尚无版本' }}</strong><span>{{ currentRevision?.changeSummary ?? '将创建初版' }}</span></div><pre>{{ currentRevision?.content ?? '当前没有可参考的版本正文。' }}</pre></aside>
+              </div>
             </template>
           </template>
 
@@ -1652,7 +1671,7 @@ onUnmounted(() => {
                   <div class="feature-card-stats">
                     <span class="stat-pill">{{ capabilitiesForFeature(feature.id).length }} 项能力</span>
                     <span class="stat-pill">{{ tasksForFeature(feature.id).length }} 个任务</span>
-                    <span class="stat-pill verification" :class="{ empty: featureVerificationLabel(feature.id) === '未登记验证' }">{{ featureVerificationLabel(feature.id) }}</span>
+                    <span class="stat-pill verification" :class="{ empty: featureVerificationLabel(feature.id) === '未登记验证', pass: featureVerificationTone(feature.id) === 'pass', fail: featureVerificationTone(feature.id) === 'fail' }">{{ featureVerificationLabel(feature.id) }}</span>
                   </div>
                   <div class="feature-card-footer">
                     <code class="feature-code">#{{ feature.code }}</code>
@@ -1700,7 +1719,7 @@ onUnmounted(() => {
                       <div class="board-card-title">{{ feature.name }}</div>
                       <div class="board-card-meta">
                         <span>{{ capabilitiesForFeature(feature.id).length }} 能力</span>
-                        <span class="board-verification" :class="{ empty: featureVerificationLabel(feature.id) === '未登记验证' }">{{ featureVerificationLabel(feature.id) }}</span>
+                        <span class="board-verification" :title="featureVerificationLabel(feature.id)" :class="{ empty: featureVerificationLabel(feature.id) === '未登记验证', pass: featureVerificationTone(feature.id) === 'pass', fail: featureVerificationTone(feature.id) === 'fail' }">{{ featureVerificationLabel(feature.id) }}</span>
                       </div>
                     </div>
                     <button v-if="featuresForColumn(col).length > 8" class="board-show-more" type="button" @click="toggleBoardColumn(col.key)">{{ expandedBoardColumns.has(col.key) ? '收起' : `查看其余 ${featuresForColumn(col).length - 8} 项` }}</button>
@@ -1773,7 +1792,7 @@ onUnmounted(() => {
 
           <CapabilityProgress v-if="workspacePage === 'development'" :detail="projectDetail" mode="development" @open-feature="openFeature" />
           <ProjectArchive v-if="workspacePage === 'archive' || workspacePage === 'records'" ref="archiveView" :key="projectDetail.project.id + workspacePage + refreshEpoch" :project-id="projectDetail.project.id" :initial-tab="workspacePage === 'records' ? 'records' : 'documents'" :initial-document-id="archiveDocumentId" />
-          <TestingWorkspace v-if="workspacePage === 'testing'" :detail="projectDetail" @open-feature="openFeature" />
+          <TestingWorkspace v-if="workspacePage === 'testing'" :detail="projectDetail" @open-feature="openFeature" @changed="refreshCurrentProject" />
           <template v-if="workspacePage === 'ai'">
             <div class="compact-page-heading"><div class="heading-title-group"><h1>执行记录</h1><span class="heading-badge">共 {{ sortedRuns.length }} 次运行</span></div></div>
             <section v-if="sortedRuns.length" class="run-workbench">

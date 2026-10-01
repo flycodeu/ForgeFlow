@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import type { ArchiveDocumentDetail, CreatedAiToken, EngineeringAssetRevision, Project, ProjectArchiveExport, WorkEventPage, WorkEventReceipt } from '@forgeflow/contracts';
 import { createApp } from '../../app.js';
 import { openDatabase } from '../../db/client.js';
-import type { ProjectArchivePreview, ProjectDetail } from '@forgeflow/contracts';
+import type { ProjectArchivePreview, ProjectDetail, ProjectLifecycle } from '@forgeflow/contracts';
 
 test('project archive preserves source text, revisions, idempotent events and project isolation across restart', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'forgeflow-archive-'));
@@ -148,7 +148,7 @@ test('archive restore roundtrips documents, design history, relationships and ru
   p.tasks.push({id:'task',...edited,featureId:'feature',capabilityId:'capability',code:'T',name:'任务',type:'OTHER',category:'IMPLEMENTATION',area:'',status:'SUBMITTED',objective:'实现',designRevisionId:'rev1',sortOrder:0});
   p.authorizations.push({id:'auth',projectId:project.id,createdAt:now,featureId:'feature',taskId:'task',status:'CONSUMED',authorizedAt:now,revokedAt:null});
   p.sources.push({id:'source',...edited,alias:'main',displayName:'源码',purpose:'',sourceKind:'DIRECTORY',remoteUrl:null,repoSubdir:null,scope:{include:[],exclude:[]},locations:[{environmentKey:'windows',localRoot:'Z:\\never-read',accessibility:'UNKNOWN',analysisStatus:'NOT_REQUESTED',lastCheckedAt:null}],status:'REGISTERED'});
-  p.runs.push({id:'run',...edited,featureId:'feature',taskId:'task',authorizationId:'auth',actorType:'MANUAL',actorName:'测试',status:'SUBMITTED',phase:'SUBMITTING',baseCommit:null,resultCommit:null,summary:'自报完成',changedFiles:[{sourceId:'source',relativePath:'app.ts'}],verificationSummary:{status:'PASS',reportedStatus:'PASS',evidenceStatus:'REPORTED',origin:'AI_REPORTED',summary:'历史证据'},designSnapshot:{specifications:[{specId:'spec',revisionId:'rev1',revisionNo:1}],engineeringAssets:[{assetId:doc.id,revisionId:doc.currentRevisionId,revisionNo:1}]},sourceExecutions:[{sourceId:'source',baseline:{kind:'DIRECTORY',commit:null,dirty:null,manifestHash:null},result:{commit:null,workingTreeSummary:null},read:true,modified:true,changedFiles:[{sourceId:'source',relativePath:'app.ts'}],verification:[]}],designSnapshotStatus:'STALE',designSnapshotWarnings:[],issues:[],startedAt:now,submittedAt:now,finishedAt:now});
+  p.runs.push({id:'run',...edited,featureId:'feature',taskId:'task',authorizationId:'auth',actorType:'MANUAL',actorName:'测试',status:'SUBMITTED',phase:'SUBMITTING',baseCommit:null,resultCommit:null,summary:'自报完成',changedFiles:[{sourceId:'source',relativePath:'app.ts'}],verificationSummary:{status:'PASS',reportedStatus:'PASS',evidenceStatus:'VERIFIED',origin:'CI',summary:'历史证据',manualReview:{decision:'PASS',summary:'本机回看',evidenceRefs:[{kind:'SOURCE_FILE',sourceId:'source',relativePath:'app.ts'},{kind:'HTTPS_URL',url:'https://example.com/checks/123'}],recordedBy:'LOCAL_WEB',recordedAt:now}},designSnapshot:{specifications:[{specId:'spec',revisionId:'rev1',revisionNo:1}],engineeringAssets:[{assetId:doc.id,revisionId:doc.currentRevisionId,revisionNo:1}]},sourceExecutions:[{sourceId:'source',baseline:{kind:'DIRECTORY',commit:null,dirty:null,manifestHash:null},result:{commit:null,workingTreeSummary:null},read:true,modified:true,changedFiles:[{sourceId:'source',relativePath:'app.ts'}],verification:[]}],designSnapshotStatus:'STALE',designSnapshotWarnings:[],issues:[],startedAt:now,submittedAt:now,finishedAt:now});
   p.reviews.push({id:'review',projectId:project.id,createdAt:now,specId:'spec',revisionId:'rev1',status:'APPROVED',submittedAt:now,decidedAt:now,decisionComment:'原结论'});
   p.traceLinks.push({id:'link',projectId:project.id,createdAt:now,sourceType:'CAPABILITY',sourceId:'capability',targetType:'ENGINEERING_ASSET',targetId:doc.id,relation:'IMPLEMENTS'});
   p.sourceAnalyses.push({id:'analysis',projectId:project.id,displayId:'A1',requestedSourceIds:['source'],targetScope:{featureId:'feature',capabilityId:'capability'},environmentKey:'windows',status:'SYNCED',sourceSnapshots:{note:'原样保留'},checkpoint:null,summary:'分析结果',errors:null,requestedAt:now,startedAt:now,completedAt:now,updatedAt:now,sources:p.sources,recommendedFlow:[],exclusions:[],prompts:{codex:'',claude:''}});
@@ -168,6 +168,15 @@ test('archive restore roundtrips documents, design history, relationships and ru
   assert.notEqual(restored.runs[0]!.id,'run');
   assert.equal(restored.runs[0]!.taskId,restored.tasks[0]!.id);
   assert.equal(restored.runs[0]!.authorizationId,restored.authorizations[0]!.id);
+  assert.equal(restored.runs[0]!.verificationSummary?.origin,'CI');
+  assert.equal(restored.runs[0]!.verificationSummary?.evidenceStatus,'VERIFIED');
+  assert.equal(restored.runs[0]!.verificationSummary?.trustStatus,'HISTORICAL_UNATTESTED');
+  assert.equal(restored.runs[0]!.verificationSummary?.manualReview?.recordedBy,'IMPORTED');
+  assert.deepEqual(restored.runs[0]!.verificationSummary?.manualReview?.evidenceRefs[0],
+    {kind:'SOURCE_FILE',sourceId:restored.sources[0]!.id,relativePath:'app.ts'});
+  const restoredLifecycle=await request<ProjectLifecycle>('GET',`/api/projects/${restored.project.id}/lifecycle`);
+  assert.deepEqual(restoredLifecycle.manualReview,{passed:0,failed:0});
+  assert.match(restoredLifecycle.stages.find((stage)=>stage.key==='verification')!.summary,/本机复核 0 · 独立 CI 0/);
   assert.equal(restored.runs[0]!.designSnapshot.specifications[0]!.specId,restored.specifications[0]!.id);
   assert.equal(restored.sourceAnalyses[0]!.requestedSourceIds[0],restored.sources[0]!.id);
   assert.equal(restored.sourceAnalyses[0]!.targetScope.capabilityId,restored.capabilities[0]!.id);

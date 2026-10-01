@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { Capability, Feature, ProjectDetail } from '@forgeflow/contracts';
+import { latestRun, runVerificationLabel, runVerificationTone, taskImplementationLabel } from '../evidence-status';
 
 const props = defineProps<{ detail: ProjectDetail }>();
 const emit = defineEmits<{ openFeature: [feature: Feature] }>();
@@ -23,20 +24,21 @@ function runsOf(capability: Capability) {
 function hasDesign(capability: Capability) { return props.detail.specifications.some((spec) => spec.capabilityId === capability.id && spec.latestRevisionId); }
 function implementation(capability: Capability) {
   const tasks = tasksOf(capability);
-  if (capability.status === 'DONE' || tasks.some((task) => ['DONE', 'CONFIRMED'].includes(task.status))) return '已完成';
+  if (!tasks.length && ['DONE', 'TESTING'].includes(capability.status)) return '状态已登记，缺实施证据';
+  if (tasks.some((task) => ['DONE', 'CONFIRMED'].includes(task.status))) return taskImplementationLabel(tasks, runsOf(capability));
   if (capability.status === 'IMPLEMENTING' || tasks.some((task) => task.status === 'RUNNING')) return '进行中';
   if (capability.status === 'BLOCKED') return '受阻';
   return '未登记';
 }
+function verificationRun(capability: Capability) { return latestRun(runsOf(capability)); }
 function verification(capability: Capability) {
-  const latest = runsOf(capability).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
-  if (latest?.verificationSummary?.status === 'PASS') return `✓ ${latest.verificationSummary.origin === 'AI_REPORTED' ? 'AI 报告通过' : '有证据通过'}`;
-  if (latest?.verificationSummary) return `${latest.verificationSummary.status} · ${latest.verificationSummary.origin}`;
+  const latest = verificationRun(capability);
+  if (latest) return runVerificationLabel(latest);
   if (capability.status === 'TESTING') return '验证中';
   return '未登记验证';
 }
 function statusName(status: Capability['status']) {
-  return { DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中', TESTING: '验证中', DONE: '已完成', BLOCKED: '受阻' }[status];
+  return { DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中', TESTING: '验证中', DONE: '标记完成', BLOCKED: '受阻' }[status];
 }
 </script>
 
@@ -88,19 +90,19 @@ function statusName(status: Capability['status']) {
             <span
               class="status-badge-clean"
               :class="{
-                pass: implementation(capability) === '已完成',
                 active: implementation(capability) === '进行中',
-                warn: implementation(capability) === '受阻'
+                warn: implementation(capability) === '受阻' || implementation(capability).includes('缺实施证据') || implementation(capability).includes('设计已变更')
               }"
             >
-              {{ implementation(capability) === '已完成' ? '✓ 已完成' : implementation(capability) }}
+              {{ implementation(capability) }}
             </span>
           </span>
           <span class="cell-status">
             <span
               class="status-badge-clean"
               :class="{
-                pass: verification(capability).startsWith('✓'),
+                pass: verificationRun(capability) && runVerificationTone(verificationRun(capability)!) === 'pass',
+                warn: verificationRun(capability) && runVerificationTone(verificationRun(capability)!) === 'fail',
                 active: verification(capability) === '验证中'
               }"
             >
@@ -172,10 +174,10 @@ function statusName(status: Capability['status']) {
 }
 .matrix-head {
   display: grid;
-  grid-template-columns: minmax(100px, 1fr) minmax(110px, 1fr) minmax(180px, 1.6fr) 90px 90px 140px;
+  grid-template-columns: minmax(100px, 1fr) minmax(110px, 1fr) minmax(180px, 1.6fr) 90px 160px 180px;
   align-items: center;
   gap: 16px;
-  min-width: 760px;
+  min-width: 900px;
   padding: 12px 20px;
   background: var(--surface-subtle);
   border-bottom: 1px solid var(--line);
@@ -189,11 +191,11 @@ function statusName(status: Capability['status']) {
 }
 .matrix-row {
   display: grid;
-  grid-template-columns: minmax(100px, 1fr) minmax(110px, 1fr) minmax(180px, 1.6fr) 90px 90px 140px;
+  grid-template-columns: minmax(100px, 1fr) minmax(110px, 1fr) minmax(180px, 1.6fr) 90px 160px 180px;
   align-items: center;
   gap: 16px;
   width: 100%;
-  min-width: 760px;
+  min-width: 900px;
   min-height: 52px;
   height: auto;
   padding: 12px 20px;
@@ -297,7 +299,8 @@ function statusName(status: Capability['status']) {
   border: 1px solid var(--line);
   font-size: 12px;
   font-weight: 500;
-  white-space: nowrap;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 .status-badge-clean.pass {
   background: var(--primary-subtle);
@@ -317,11 +320,11 @@ function statusName(status: Capability['status']) {
   border-color: rgba(225, 29, 72, 0.2);
 }
 @container progress (max-width: 900px) {
-  .matrix-head, .matrix-row { grid-template-columns: minmax(0, 1fr) 76px 76px 120px; gap: 10px; padding-inline: 12px; }
+  .matrix-head, .matrix-row { grid-template-columns: minmax(0, 1fr) 76px 160px 180px; min-width: 0; gap: 10px; padding-inline: 12px; }
   .matrix-head > :nth-child(-n+2), .matrix-row > :nth-child(-n+2) { display: none; }
 }
 @container progress (max-width: 540px) {
-  .matrix-head, .matrix-row { grid-template-columns: minmax(0, 1fr) 120px; }
+  .matrix-head, .matrix-row { grid-template-columns: minmax(0, 1fr) 180px; }
   .matrix-head > :nth-child(4), .matrix-head > :nth-child(5), .matrix-row > :nth-child(4), .matrix-row > :nth-child(5) { display: none; }
   .cell-capability { min-width: 0; }
   .cap-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

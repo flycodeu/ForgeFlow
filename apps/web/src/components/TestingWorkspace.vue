@@ -1,11 +1,24 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import type { AiRun, Feature, FeatureStatus, ProjectDetail, RunReportedStatus } from '@forgeflow/contracts';
+import { computed, nextTick, ref } from 'vue';
+import type { AiRun, Feature, FeatureStatus, ProjectDetail } from '@forgeflow/contracts';
+import { currentLocalReviewVerdict, latestRun, runVerificationContext, runVerificationLabel, runVerificationTone } from '../evidence-status';
+import { api } from '../api-client';
 
 const props = defineProps<{ detail: ProjectDetail }>();
-const emit = defineEmits<{ openFeature: [feature: Feature] }>();
+const emit = defineEmits<{ openFeature: [feature: Feature]; changed: [] }>();
 
 const activeTab = ref<'acceptance' | 'runs'>('acceptance');
+const reviewRunId = ref<string | null>(null);
+const reviewDecision = ref<'PASS' | 'FAIL'>('PASS');
+const reviewSummary = ref('');
+const reviewEvidenceKind = ref<'SOURCE_FILE' | 'HTTPS_URL'>('SOURCE_FILE');
+const reviewSourceId = ref('');
+const reviewRelativePath = ref('');
+const reviewUrl = ref('');
+const reviewError = ref('');
+const reviewNotice = ref('');
+const reviewSaving = ref(false);
+const selectedReviewRun = computed(() => props.detail.runs.find((run) => run.id === reviewRunId.value));
 
 const features = computed(() => props.detail.features.slice().sort((a, b) => a.sortOrder - b.sortOrder));
 const runsWithVerification = computed(() =>
@@ -17,16 +30,19 @@ const runsWithVerification = computed(() =>
 function runTime(run: AiRun) {
   return new Date(run.finishedAt ?? run.submittedAt ?? run.createdAt).getTime();
 }
-const latestByTask = computed(() => new Map(runsWithVerification.value.slice().reverse().map((run) => [run.taskId, run])));
-function isCurrentVerified(run: AiRun) {
-  return run.designSnapshotStatus === 'CURRENT' && run.verificationSummary?.origin === 'CI'
-    && run.verificationSummary.evidenceStatus === 'VERIFIED';
-}
+const latestByTask = computed(() => {
+  const grouped = new Map<string, AiRun[]>();
+  for (const run of props.detail.runs) grouped.set(run.taskId, [...(grouped.get(run.taskId) ?? []), run]);
+  return new Map([...grouped].flatMap(([taskId, runs]) => {
+    const latest = latestRun(runs);
+    return latest ? [[taskId, latest] as const] : [];
+  }));
+});
 const currentChecks = computed(() => [...latestByTask.value.values()].filter((run) =>
-  isCurrentVerified(run) && ['PASS', 'FAIL', 'ERROR'].includes(run.verificationSummary!.reportedStatus),
+  currentLocalReviewVerdict(run) !== null,
 ));
 const totalVerificationRuns = computed(() => currentChecks.value.length);
-const passedRuns = computed(() => currentChecks.value.filter((run) => run.verificationSummary?.reportedStatus === 'PASS').length);
+const passedRuns = computed(() => currentChecks.value.filter((run) => currentLocalReviewVerdict(run) === 'PASS').length);
 const passRate = computed(() =>
   totalVerificationRuns.value ? Math.round((passedRuns.value / totalVerificationRuns.value) * 100) : null,
 );
@@ -52,7 +68,7 @@ function capabilitiesOf(featureId: string) {
 }
 
 function latestRunOf(featureId: string) {
-  return runsWithVerification.value.find((run) => run.featureId === featureId);
+  return latestRun(props.detail.runs.filter((run) => run.featureId === featureId));
 }
 
 function featureStatusLabel(status: FeatureStatus) {
@@ -63,39 +79,59 @@ function featureStatusLabel(status: FeatureStatus) {
     IMPLEMENTING: '实施中',
     VERIFYING: '验证中',
     ACCEPTANCE_PENDING: '待验收',
-    ACCEPTED: '已验收',
+    ACCEPTED: '已标记验收',
     DELIVERED: '交付标记（待核对）',
   };
   return map[status] ?? status;
 }
 
-function runStatusLabel(status: RunReportedStatus) {
-  const map: Record<RunReportedStatus, string> = {
-    PASS: '通过',
-    FAIL: '失败',
-    NOT_RUN: '未执行',
-    SKIPPED: '已跳过',
-    ERROR: '异常',
-  };
-  return map[status] ?? status;
-}
-function evidenceLabel(run: AiRun | undefined) {
-  const evidence = run?.verificationSummary;
-  if (!evidence) return '未记录';
-  const source = { AI_REPORTED: 'AI 自报', LOCAL_CAPTURED: '本地采集', CI: 'CI 核验', HUMAN: '人工报告' }[evidence.origin];
-  return `${source} · ${runStatusLabel(evidence.reportedStatus)}`;
-}
+function evidenceLabel(run: AiRun | undefined) { return run ? runVerificationLabel(run) : '未记录'; }
 function evidenceContext(run: AiRun) {
-  if (run.designSnapshotStatus === 'STALE') return '设计已变更 · 历史记录';
-  if (run.designSnapshotStatus === 'UNKNOWN') return '设计版本未知 · 不计当前核验';
-  if (latestByTask.value.get(run.taskId)?.id !== run.id) return '较早记录 · 不计当前核验';
-  if (isCurrentVerified(run)) return '当前设计 · CI 核验';
-  return '当前设计 · 未核验';
+  return runVerificationContext(run, latestByTask.value.get(run.taskId)?.id === run.id);
 }
 function verifiedTone(run: AiRun) {
-  if (latestByTask.value.get(run.taskId)?.id !== run.id || !isCurrentVerified(run)) return '';
-  return run.verificationSummary?.reportedStatus === 'PASS' ? 'pass'
-    : ['FAIL', 'ERROR'].includes(run.verificationSummary?.reportedStatus ?? '') ? 'fail' : '';
+  return latestByTask.value.get(run.taskId)?.id === run.id ? runVerificationTone(run) : '';
+}
+
+function canReview(run: AiRun) {
+  return run.status === 'SUBMITTED' && run.designSnapshotStatus === 'CURRENT'
+    && latestByTask.value.get(run.taskId)?.id === run.id
+    && Boolean(run.verificationSummary) && !run.verificationSummary?.manualReview;
+}
+function reviewSources(run: AiRun) {
+  const referencedIds = new Set(run.sourceExecutions.map((item) => item.sourceId));
+  for (const file of run.changedFiles) if (typeof file !== 'string') referencedIds.add(file.sourceId);
+  return props.detail.sources.filter((source) => referencedIds.has(source.id));
+}
+function startReview(run: AiRun) {
+  reviewRunId.value = reviewRunId.value === run.id ? null : run.id;
+  reviewDecision.value = run.verificationSummary?.reportedStatus === 'PASS' ? 'PASS' : 'FAIL';
+  reviewSummary.value = '';
+  reviewEvidenceKind.value = reviewSources(run).length ? 'SOURCE_FILE' : 'HTTPS_URL';
+  reviewSourceId.value = reviewSources(run)[0]?.id ?? '';
+  reviewRelativePath.value = '';
+  reviewUrl.value = '';
+  reviewError.value = '';
+  reviewNotice.value = '';
+  if (reviewRunId.value) void nextTick(() => document.getElementById('run-review-form')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+}
+async function submitReview(run: AiRun) {
+  if (reviewSaving.value) return;
+  reviewError.value = '';
+  const evidenceRefs = reviewEvidenceKind.value === 'SOURCE_FILE'
+    ? [{ kind: 'SOURCE_FILE' as const, sourceId: reviewSourceId.value, relativePath: reviewRelativePath.value.trim() }]
+    : [{ kind: 'HTTPS_URL' as const, url: reviewUrl.value.trim() }];
+  reviewSaving.value = true;
+  try {
+    await api(`/api/projects/${props.detail.project.id}/runs/${run.id}/manual-review`, {
+      method: 'POST', body: JSON.stringify({ decision: reviewDecision.value, summary: reviewSummary.value.trim(), evidenceRefs }),
+    });
+    reviewRunId.value = null;
+    reviewNotice.value = '本机复核已记录，正在刷新项目数据。';
+    emit('changed');
+  } catch (cause) {
+    reviewError.value = cause instanceof Error ? cause.message : '保存复核失败';
+  } finally { reviewSaving.value = false; }
 }
 
 function formatTime(iso: string) {
@@ -115,9 +151,9 @@ function formatTime(iso: string) {
 
     <div class="testing-kpis-grid">
       <div class="kpi-card">
-        <span class="kpi-label">当前 CI 核验通过率</span>
+        <span class="kpi-label">当前本机复核通过率</span>
         <strong class="kpi-value">{{ passRate === null ? '—' : `${passRate}%` }}</strong>
-        <span class="kpi-meta">{{ totalVerificationRuns ? `${passedRuns} / ${totalVerificationRuns} 项任务通过` : '暂无当前设计的 CI 核验' }}</span>
+        <span class="kpi-meta">{{ totalVerificationRuns ? `${passedRuns} / ${totalVerificationRuns} 项任务通过` : '暂无当前设计的本机复核' }}</span>
       </div>
       <div class="kpi-card">
         <span class="kpi-label">待验收功能</span>
@@ -125,7 +161,7 @@ function formatTime(iso: string) {
         <span class="kpi-meta">{{ features.length }} 项</span>
       </div>
       <div class="kpi-card">
-        <span class="kpi-label">已验收功能</span>
+        <span class="kpi-label">已标记验收功能</span>
         <strong class="kpi-value success-stat">{{ acceptedFeatures }}</strong>
       </div>
       <div class="kpi-card">
@@ -178,7 +214,7 @@ function formatTime(iso: string) {
             <strong>{{ feature.name }}</strong>
           </div>
           <div class="cell-test">
-            <template v-if="latestRunOf(feature.id)?.verificationSummary">
+            <template v-if="latestRunOf(feature.id)">
               <span
                 class="test-badge"
                 :class="verifiedTone(latestRunOf(feature.id)!)"
@@ -188,7 +224,7 @@ function formatTime(iso: string) {
               </span>
               <small class="evidence-note">{{ evidenceContext(latestRunOf(feature.id)!) }}</small>
             </template>
-            <span v-else class="test-empty">暂无核验记录</span>
+            <span v-else class="test-empty">暂无执行记录</span>
           </div>
           <div class="cell-status">
             <span class="feature-status-pill" :data-status="feature.status">
@@ -208,7 +244,23 @@ function formatTime(iso: string) {
     </section>
 
     <!-- Tab 2: Verification Runs & Logs -->
-    <section v-else class="surface matrix-card">
+    <template v-else>
+      <p v-if="reviewNotice" class="review-notice" role="status">{{ reviewNotice }}</p>
+      <form v-if="selectedReviewRun" id="run-review-form" class="review-form" @submit.prevent="submitReview(selectedReviewRun)">
+        <p>本机操作复核当前设计与引用材料。原 AI 报告会保留，复核记录独立展示。</p>
+        <label>复核结论<select v-model="reviewDecision"><option v-if="selectedReviewRun.verificationSummary?.reportedStatus === 'PASS'" value="PASS">通过</option><option value="FAIL">未通过</option></select></label>
+        <p v-if="selectedReviewRun.verificationSummary?.reportedStatus !== 'PASS'" class="review-constraint">原执行报告未通过，本次只能记录“未通过”；要确认通过，请按当前设计重新执行。</p>
+        <label class="review-wide">复核依据与结论<textarea v-model="reviewSummary" rows="2" maxlength="2000" required placeholder="写明实际核对的内容和结论" /></label>
+        <label>证据类型<select v-model="reviewEvidenceKind"><option v-if="reviewSources(selectedReviewRun).length" value="SOURCE_FILE">项目源码文件</option><option value="HTTPS_URL">HTTPS 链接</option></select></label>
+        <template v-if="reviewEvidenceKind === 'SOURCE_FILE'">
+          <label>本次 Run 的 Source<select v-model="reviewSourceId" required><option v-for="source in reviewSources(selectedReviewRun)" :key="source.id" :value="source.id">{{ source.alias }}</option></select></label>
+          <label class="review-wide">相对文件路径<input v-model="reviewRelativePath" required placeholder="src/module/file.ts" /></label>
+        </template>
+        <label v-else class="review-wide">证据链接<input v-model="reviewUrl" type="url" pattern="https://.*" required placeholder="https://example.com/evidence" /></label>
+        <span v-if="reviewError" class="review-error" role="alert">{{ reviewError }}</span>
+        <div class="review-actions"><button type="button" @click="reviewRunId = null">取消</button><button type="submit" :disabled="reviewSaving">{{ reviewSaving ? '保存中…' : '保存本机复核' }}</button></div>
+      </form>
+      <section class="surface matrix-card">
       <div class="runs-table-head">
         <span>执行时间</span>
         <span>关联任务 / 功能</span>
@@ -238,6 +290,8 @@ function formatTime(iso: string) {
               {{ evidenceLabel(run) }}
             </span>
             <small :title="run.verificationSummary?.summary">{{ evidenceContext(run) }} · {{ run.verificationSummary?.summary }}</small>
+            <small v-if="run.verificationSummary?.manualReview" class="review-summary" :title="run.verificationSummary.manualReview.summary">{{ run.verificationSummary.manualReview.recordedBy === 'IMPORTED' ? '导入记录（来源未核验）' : `本机复核记录（${run.verificationSummary.manualReview.recordedBy === 'LOCAL_WEB' ? '本机操作' : 'Owner 凭据'}）` }}：{{ run.verificationSummary.manualReview.summary }}</small>
+            <button v-if="canReview(run)" type="button" class="review-action" @click="startReview(run)">{{ reviewRunId === run.id ? '取消复核' : '记录本机复核' }}</button>
           </div>
           <div class="run-cell-files">
             <span>{{ run.changedFiles.length }} 个文件</span>
@@ -251,7 +305,8 @@ function formatTime(iso: string) {
       <div v-else class="compact-empty">
         暂无测试执行记录
       </div>
-    </section>
+      </section>
+    </template>
   </div>
 </template>
 
@@ -521,10 +576,8 @@ function formatTime(iso: string) {
   align-items: center;
   gap: 16px;
   width: 100%;
-  height: 52px;
-  min-height: 52px;
-  max-height: 52px;
-  padding: 0 20px;
+  min-height: 72px;
+  padding: 10px 20px;
   box-sizing: border-box;
   border-bottom: 1px solid var(--surface-subtle);
   font-size: 13px;
@@ -582,6 +635,21 @@ function formatTime(iso: string) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.review-action { padding: 2px 0; border: 0; background: transparent; color: var(--primary); font-size: 11.5px; font-weight: 600; cursor: pointer; }
+.review-action:hover { text-decoration: underline; }
+.review-notice { margin: 10px 20px; color: #047857; font-size: 12px; }
+.review-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; margin-bottom: 12px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); }
+.review-form p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 12px; }
+.review-form p.review-constraint { color: #92400e; }
+.review-form label { display: grid; gap: 5px; color: var(--ink-secondary); font-size: 12px; font-weight: 600; }
+.review-form .review-wide, .review-error, .review-actions { grid-column: 1 / -1; }
+.review-form input, .review-form select, .review-form textarea { width: 100%; min-width: 0; padding: 7px 9px; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); color: var(--ink); font: inherit; }
+.review-form textarea { resize: vertical; }
+.review-error { color: #b91c1c; font-size: 12px; }
+.review-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.review-actions button { padding: 7px 12px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); color: var(--ink-secondary); font-size: 12px; cursor: pointer; }
+.review-actions button[type='submit'] { border-color: var(--primary); background: var(--primary); color: white; }
+.review-actions button:disabled { opacity: 0.55; cursor: not-allowed; }
 .run-cell-files span {
   color: var(--muted);
   font-size: 12px;
@@ -618,5 +686,7 @@ function formatTime(iso: string) {
 @container testing (max-width: 440px) {
   .qa-table-head, .qa-table-row { grid-template-columns: minmax(0, 1fr) 120px; }
   .qa-table-head > :nth-child(3), .qa-table-row > :nth-child(3) { display: none; }
+  .review-form { grid-template-columns: 1fr; }
+  .review-form p, .review-form .review-wide, .review-error, .review-actions { grid-column: 1; }
 }
 </style>

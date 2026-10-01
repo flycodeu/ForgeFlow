@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type {
-  AiScope, CapabilityStatus, ProjectSourceKind, RequestSourceAnalysisInput, ResolveProjectSourcesInput, RunPhase, SubmitSourceAnalysisInput,
+  AiScope, ProjectSourceKind, RequestSourceAnalysisInput, ResolveProjectSourcesInput, RunPhase, SubmitSourceAnalysisInput,
   RunChangedFile, RunReportedStatus, RunSourceExecution, TaskCategory, TaskType, UpsertProjectSourceInput, WorkflowMode,
 } from '@forgeflow/contracts';
 import { McpServer } from '@modelcontextprotocol/server';
@@ -189,7 +189,7 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
 
   server.registerTool('submit_source_analysis', {
     title: '提交源码分析结果',
-    description: '写回只读源码分析的快照、代码引用、摘要、检查点与错误；不会修改业务源码或自动创建功能。',
+    description: '写回只读分析结果；标记 SYNCED 时每个请求的 Source 都须有文件入口或代码引用，且 errors 为空。有遗漏或错误请提交 PARTIAL/FAILED。不会修改业务源码或自动创建功能。',
     inputSchema: z.object({
       projectId: z.string().uuid(), analysisId: z.string().uuid(), status: z.enum(['PARTIAL', 'SYNCED', 'FAILED']),
       sourceSnapshots: z.record(z.string().uuid(), z.unknown()).nullable().optional(),
@@ -357,16 +357,15 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
 
   server.registerTool('create_capability', {
     title: '创建 Capability',
-    description: '在 Feature 下创建用户可理解的独立能力。Capability 表达做什么，Task 只表达下一步如何实施。',
+    description: '在 Feature 下创建 DRAFT 能力项。实施状态只能由设计与 Task/Run 流程计算，不接受直接指定 DONE。',
     inputSchema: z.object({
       projectId: z.string().uuid(), featureId: z.string().uuid(),
       code: z.string().trim().toUpperCase().regex(/^[A-Z][A-Z0-9_-]{0,39}$/),
       name: z.string().trim().min(1).max(120), summary: z.string().trim().max(1000),
-      status: z.enum(['DRAFT', 'DESIGNED', 'IMPLEMENTING', 'TESTING', 'DONE', 'BLOCKED']).optional(),
       sortOrder: z.number().int().nonnegative(),
     }).strict(),
     annotations: { destructiveHint: false, openWorldHint: false },
-  }, safely((input: { projectId: string; featureId: string; code: string; name: string; summary: string; status?: CapabilityStatus; sortOrder: number }) =>
+  }, safely((input: { projectId: string; featureId: string; code: string; name: string; summary: string; sortOrder: number }) =>
     workspace.createCapability(input.projectId, input.featureId, input)));
 
   server.registerTool('create_feature_design', {
@@ -485,7 +484,7 @@ function createForgeFlowMcpServer(workspace: WorkspaceService, principal: AiToke
 
   server.registerTool('submit_run_result', {
     title: '提交 Run 结果',
-    description: '提交 AI 报告的变更与验证结果。origin 固定为 AI_REPORTED；AUTO 仍可按 reportedStatus 流转，但页面不会显示为独立验证。',
+    description: '提交 AI 报告的变更与验证结果。origin 固定为 AI_REPORTED；AUTO PASS 需要已读 Source 的基线与 PASS 命令记录，实施任务还需该 Source 的结构化修改文件。报告不构成独立核验。',
     inputSchema: z.object({
       runId: z.string().uuid(),
       resultCommit: z.string().trim().min(1).max(100).nullable(),

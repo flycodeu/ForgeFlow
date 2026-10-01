@@ -12,7 +12,7 @@ if (!keyPath) throw new Error('Set FORGEFLOW_RELEASE_PRIVATE_KEY to a private ke
 const key = createPrivateKey(await readFile(keyPath));
 const bytes = await readFile(installerPath);
 const installer = { file, sha256: createHash('sha256').update(bytes).digest('hex'), size: (await stat(installerPath)).size };
-const notes = process.env.FORGEFLOW_RELEASE_NOTES ?? '重整两个项目的背景、需求、调研、架构和技术资料；新增项目全景图及可编辑的项目简介。';
+const notes = process.env.FORGEFLOW_RELEASE_NOTES ?? '项目文档写入规则、AI 实施证据约束、本机复核与历史来源区分，并修正当前进度统计。';
 const payload = { schema: 1, version, installer, notes };
 const signature = sign(null, Buffer.from(JSON.stringify(payload)), key).toString('base64');
 const manifest = { ...payload, signature };

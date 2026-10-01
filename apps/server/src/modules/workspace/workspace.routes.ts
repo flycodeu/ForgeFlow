@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type {
-  CapabilityStatus, FeatureStatus, ProjectSourceKind, ProjectSourceScope, RequestSourceAnalysisInput, RunPhase,
+  CapabilityStatus, FeatureStatus, ProjectSourceKind, ProjectSourceScope, RequestSourceAnalysisInput, RunManualReview, RunPhase,
   RunChangedFile, RunReportedStatus, RunSourceExecution, TaskCategory, TaskStatus, TaskType, UpsertProjectSourceInput, WorkflowMode,
 } from '@forgeflow/contracts';
 import { ApiError } from '../../shared/api-error.js';
@@ -247,6 +247,25 @@ function sourceExecutionsField(body: Record<string, unknown>): RunSourceExecutio
     throw new ApiError(400, 'INVALID_INPUT', '源码执行快照必须是最多 50 项的数组');
   }
   return value as RunSourceExecution[];
+}
+
+function manualReviewEvidenceField(body: Record<string, unknown>): RunManualReview['evidenceRefs'] {
+  const value = body.evidenceRefs;
+  if (!Array.isArray(value) || value.length < 1 || value.length > 25) {
+    throw new ApiError(400, 'MANUAL_REVIEW_EVIDENCE_REQUIRED', '本机复核须有 1–25 条 Source 文件或 HTTPS 证据引用');
+  }
+  return value.map((item) => {
+    const reference = bodyObject(item);
+    if (reference.kind === 'SOURCE_FILE') return {
+      kind: 'SOURCE_FILE' as const,
+      sourceId: uuidField(reference, 'sourceId', '证据 Source ID'),
+      relativePath: textField(reference, 'relativePath', '证据相对路径', 1000),
+    };
+    if (reference.kind === 'HTTPS_URL') return {
+      kind: 'HTTPS_URL' as const, url: textField(reference, 'url', '证据 URL', 2000),
+    };
+    throw new ApiError(400, 'INVALID_MANUAL_REVIEW', '证据引用必须是 Source 文件或 HTTPS URL');
+  });
 }
 
 export function registerWorkspaceRoutes(app: FastifyInstance, service: WorkspaceService, auth: AuthService) {
@@ -690,6 +709,20 @@ export function registerWorkspaceRoutes(app: FastifyInstance, service: Workspace
       },
       issues: stringListField(body, 'issues', '问题列表', 100),
       sourceExecutions: sourceExecutionsField(body),
+    });
+  });
+
+  app.post<{ Params: RunParams }>('/api/projects/:projectId/runs/:runId/manual-review', async (request) => {
+    const principal = await auth.require(request, 'owner', true);
+    const body = bodyObject(request.body);
+    if (body.decision !== 'PASS' && body.decision !== 'FAIL') {
+      throw new ApiError(400, 'INVALID_MANUAL_REVIEW', '本机复核结论须为 PASS 或 FAIL');
+    }
+    return service.recordManualReview(request.params.projectId, request.params.runId, {
+      decision: body.decision,
+      summary: textField(body, 'summary', '复核说明', 2000),
+      evidenceRefs: manualReviewEvidenceField(body),
+      recordedBy: principal.kind === 'owner' ? 'OWNER' : 'LOCAL_WEB',
     });
   });
 

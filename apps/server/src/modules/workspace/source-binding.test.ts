@@ -131,6 +131,24 @@ test('multi-source bindings stay project-scoped and analysis results round-trip 
   assert.equal(claimed.status, 'READING');
   assert.ok(claimed.startedAt);
 
+  const incomplete = toolError(await call(planner.token, 'submit_source_analysis', {
+    projectId: project.id, analysisId: analysis.id, status: 'SYNCED', summary: '只读取一个源码',
+    sourceSnapshots: { [sources[0]!.id]: { files: ['README.md'] } }, errors: null,
+  }));
+  assert.equal(incomplete.code, 'SOURCE_SNAPSHOT_REQUIRED');
+  const emptySnapshot = toolError(await call(planner.token, 'submit_source_analysis', {
+    projectId: project.id, analysisId: analysis.id, status: 'SYNCED', summary: '仅填了目录，未读取文件',
+    sourceSnapshots: Object.fromEntries(sources.map((source) => [source.id, { root: source.locations[0]!.localRoot }])),
+    errors: null,
+  }));
+  assert.equal(emptySnapshot.code, 'SOURCE_SNAPSHOT_REQUIRED');
+  const unresolved = toolError(await call(planner.token, 'submit_source_analysis', {
+    projectId: project.id, analysisId: analysis.id, status: 'SYNCED', summary: '有一个 Source 读取失败',
+    sourceSnapshots: Object.fromEntries(sources.map((source) => [source.id, { files: ['README.md'] }])),
+    errors: { [sources[1]!.id]: '权限不足' },
+  }));
+  assert.equal(unresolved.code, 'SOURCE_ANALYSIS_ERRORS');
+
   const submitted = success<SourceAnalysis>(await call(planner.token, 'submit_source_analysis', {
     projectId: project.id,
     analysisId: analysis.id,

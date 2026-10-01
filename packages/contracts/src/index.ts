@@ -382,12 +382,22 @@ export const RUN_VERIFICATION_ORIGINS = ['AI_REPORTED', 'LOCAL_CAPTURED', 'CI', 
 export type RunVerificationOrigin = typeof RUN_VERIFICATION_ORIGINS[number];
 export type RunEvidenceStatus = 'UNVERIFIED' | 'REPORTED' | 'CAPTURED' | 'VERIFIED';
 
+export type RunManualReview = {
+  decision: 'PASS' | 'FAIL';
+  summary: string;
+  evidenceRefs: Array<{ kind: 'SOURCE_FILE'; sourceId: string; relativePath: string } | { kind: 'HTTPS_URL'; url: string }>;
+  recordedBy: 'OWNER' | 'LOCAL_WEB' | 'IMPORTED';
+  recordedAt: string;
+};
+
 export type RunVerificationSummary = {
   status: RunReportedStatus;
   reportedStatus: RunReportedStatus;
   evidenceStatus: RunEvidenceStatus;
   origin: RunVerificationOrigin;
   summary: string;
+  trustStatus?: 'REPORTED' | 'HISTORICAL_UNATTESTED';
+  manualReview?: RunManualReview;
 };
 
 export type RunDesignSnapshotItem = {
@@ -508,12 +518,13 @@ export type ProjectLifecycleStage = {
   label: string;
   status: LifecycleStageStatus;
   summary: string;
-  target: 'research' | 'requirements' | 'architecture' | 'technology' | 'features' | 'development' | 'testing' | 'overview';
+  target: 'background' | 'research' | 'requirements' | 'architecture' | 'technology' | 'features' | 'development' | 'testing' | 'overview';
 };
 
 export type ProjectLifecycle = {
   currentStage: ProjectLifecycleStage['key'];
   stages: ProjectLifecycleStage[];
+  manualReview: { passed: number; failed: number };
 };
 
 export type CapabilityDetail = {

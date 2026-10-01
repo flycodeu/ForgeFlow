@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import type {
   AiRun, AuthorizationStatus, Capability, CapabilityDesignGuidance, CapabilityDetail, CapabilityStatus, DesignReview, DesignReviewStatus, EngineeringAsset, EngineeringAssetRevision, EngineeringBlueprintPlan, Feature, FeatureDesignGuidance, FeatureEngineeringBlueprint, FeatureStatus, Module, Project, ProjectDetail, ProjectLifecycle, RunActorType, RunChangedFile, RunDesignSnapshot, RunPhase, RunReportedStatus, RunSourceExecution, RunVerificationOrigin,
-  ProjectSource, ProjectSourceLocation, ProjectSourceScope, RequestSourceAnalysisInput, ResolvedProjectSources, ResolveProjectSourcesInput, SubmitSourceAnalysisInput,
+  ProjectSource, ProjectSourceLocation, ProjectSourceScope, RequestSourceAnalysisInput, ResolvedProjectSources, ResolveProjectSourcesInput, SubmitSourceAnalysisInput, RunManualReview,
   RunStatus, RunVerificationSummary, SourceAnalysis, SourceAnalysisTargetScope, SpecificationDetail, SpecificationRevision, SpecificationRevisionSummary,
   SpecificationSummary, Task, TaskAuthorization, TaskCategory, TaskStatus, TaskType, TraceLink, UpsertProjectSourceInput, WorkflowMode,
 } from '@forgeflow/contracts';
@@ -9,6 +10,7 @@ import { ApiError } from '../../shared/api-error.js';
 import { buildCapabilityDesignGuidance } from './capability-guidance.js';
 import { buildFeatureDesignGuidance } from './design-guidance.js';
 import { engineeringKindLabel, planBlueprint } from './engineering-blueprint.js';
+import { validateProjectDocument } from './project-document-rules.js';
 import { WorkspaceRepository } from './workspace.repository.js';
 
 function projectView(project: { id: string; projectKey: string; name: string; description: string; projectType: string; workflowMode: string; designProfile: string; createdAt: Date }): Project {
@@ -24,6 +26,18 @@ const DEFAULT_SOURCE_INCLUDES = [
   'README*', 'package.json', 'pnpm-workspace.yaml', 'pom.xml', 'build.gradle*', 'Cargo.toml', 'pyproject.toml',
   'requirements*.txt', 'project.godot', 'src/**', 'apps/**', 'packages/**', 'tests/**', 'test/**', 'migrations/**', 'config/**',
 ];
+
+const runSourceExecutionSchema = z.object({
+  sourceId: z.string().uuid(),
+  baseline: z.object({ kind: z.string().trim().min(1).max(40), commit: z.string().trim().max(100).nullable(),
+    dirty: z.boolean().nullable(), manifestHash: z.string().trim().max(200).nullable() }).strict(),
+  result: z.object({ commit: z.string().trim().max(100).nullable(),
+    workingTreeSummary: z.string().trim().max(4000).nullable() }).strict(),
+  read: z.boolean(), modified: z.boolean(),
+  changedFiles: z.array(z.object({ sourceId: z.string().uuid(), relativePath: z.string().trim().min(1).max(1000) }).strict()).max(500),
+  verification: z.array(z.object({ command: z.string().trim().min(1).max(1000), workdir: z.string().trim().min(1).max(1000),
+    reportedStatus: z.enum(['PASS', 'FAIL', 'NOT_RUN', 'SKIPPED', 'ERROR']), summary: z.string().trim().max(2000) }).strict()).max(100),
+}).strict();
 
 type StoredSourceLocation = ProjectSourceLocation & { normalizedLocalRoot: string };
 
@@ -173,6 +187,19 @@ function sourceAnalysisView(analysis: {
   };
 }
 
+function hasSourceSnapshotEvidence(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const snapshot = value as Record<string, unknown>;
+  return ['files', 'entries', 'codeReferences', 'entrypoints'].some((key) => {
+    const entries = snapshot[key];
+    return Array.isArray(entries) && entries.some((entry) =>
+      typeof entry === 'string' ? entry.trim().length > 0
+        : Boolean(entry && typeof entry === 'object' && !Array.isArray(entry)
+          && typeof (entry as Record<string, unknown>).path === 'string'
+          && ((entry as Record<string, unknown>).path as string).trim()));
+  });
+}
+
 function specificationView(
   specification: { id: string; projectId: string; featureId: string | null; capabilityId: string | null; kind: string; title: string; latestRevisionId: string | null; approvedRevisionId: string | null; createdAt: Date },
   latestRevisionNumber: number | null,
@@ -296,6 +323,8 @@ function runView(run: {
     evidenceStatus: storedVerification.evidenceStatus ?? 'UNVERIFIED',
     origin: storedVerification.origin ?? 'AI_REPORTED',
     summary: storedVerification.summary ?? '',
+    trustStatus: storedVerification.origin === 'CI' ? 'HISTORICAL_UNATTESTED' : 'REPORTED',
+    ...(storedVerification.manualReview ? { manualReview: storedVerification.manualReview } : {}),
   } satisfies RunVerificationSummary : null;
   const { designSnapshotJson: _designJson, sourceExecutionsJson: _sourceJson, ...publicRun } = run;
   return {
@@ -344,6 +373,17 @@ function revisionSummaryView(revision: {
 function isUniqueConstraint(error: unknown) {
   return typeof error === 'object' && error !== null && 'code' in error
     && error.code === 'SQLITE_CONSTRAINT_UNIQUE';
+}
+
+function isImplementationTask(task: { type: string; category: string }) {
+  if (['BACKEND', 'FRONTEND', 'INTEGRATION'].includes(task.type)
+    || ['IMPLEMENTATION', 'INTEGRATION', 'MIGRATION'].includes(task.category)) return true;
+  return !['DESIGN', 'VERIFICATION'].includes(task.type)
+    && !['DESIGN', 'VERIFICATION', 'CONTENT'].includes(task.category);
+}
+
+function isPureDesignOrContentTask(task: { type: string; category: string }) {
+  return !isImplementationTask(task) && task.type !== 'VERIFICATION' && task.category !== 'VERIFICATION';
 }
 
 export class WorkspaceService {
@@ -399,6 +439,21 @@ export class WorkspaceService {
 
   private runView(run: NonNullable<ReturnType<WorkspaceRepository['findRunById']>>): AiRun {
     return runView(run, this.runFreshness(run));
+  }
+
+  private hasCurrentIndependentVerification(run: AiRun): boolean {
+    if (run.status !== 'SUBMITTED' || run.designSnapshotStatus !== 'CURRENT'
+      || run.verificationSummary?.origin !== 'CI' || run.verificationSummary.evidenceStatus !== 'VERIFIED'
+      || run.verificationSummary.reportedStatus !== 'PASS') return false;
+    // 尚无服务端 CI 来源验签机制。历史 CI 标记仍可查看，但不能作为当前可信核验。
+    return false;
+  }
+
+  private currentManualReview(run: AiRun | undefined): RunManualReview | null {
+    return run?.status === 'SUBMITTED' && run.designSnapshotStatus === 'CURRENT'
+      && run.verificationSummary?.manualReview?.recordedBy !== 'IMPORTED'
+      && (run.verificationSummary?.manualReview?.evidenceRefs.length ?? 0) > 0
+      ? run.verificationSummary!.manualReview! : null;
   }
 
   createProject(input: { projectKey: string; name: string; description?: string; projectType?: string; workflowMode?: WorkflowMode; designProfile?: string }): Project {
@@ -669,8 +724,17 @@ export class WorkspaceService {
     }
     const serialized = JSON.stringify({ snapshots, checkpoint: input.checkpoint ?? null, errors: input.errors ?? null });
     if (serialized.length > 500_000) throw new ApiError(413, 'SOURCE_ANALYSIS_TOO_LARGE', '源码分析结果超过 500 KB');
-    if (input.status === 'SYNCED' && (!snapshots || Object.keys(snapshots).length === 0)) {
-      throw new ApiError(400, 'SOURCE_SNAPSHOT_REQUIRED', '完成同步时必须提交至少一个源码快照');
+    if (input.status === 'SYNCED') {
+      const missing = requestedSourceIds.filter((sourceId) => {
+        const snapshot = snapshots?.[sourceId];
+        return !hasSourceSnapshotEvidence(snapshot);
+      });
+      if (missing.length) {
+        throw new ApiError(400, 'SOURCE_SNAPSHOT_REQUIRED', '完成同步时每个请求的 Source 都必须有文件入口或代码引用', { sourceIds: missing });
+      }
+      if (input.errors && Object.keys(input.errors).length > 0) {
+        throw new ApiError(400, 'SOURCE_ANALYSIS_ERRORS', '仍有源码分析错误时不能标为已同步；请提交 PARTIAL 或 FAILED');
+      }
     }
     const now = new Date();
     this.repository.transaction(() => {
@@ -808,13 +872,18 @@ export class WorkspaceService {
       const latest = detail.runs.filter((run) => run.featureId === feature.id && run.verificationSummary)
         .sort((a, b) => Date.parse(b.submittedAt ?? b.startedAt) - Date.parse(a.submittedAt ?? a.startedAt))[0];
       const capabilities = detail.capabilities.filter((item) => item.featureId === feature.id);
+      let manualPassed = 0;
+      let independentPassed = 0;
       const passed = capabilities.filter((capability) => {
         const taskIds = new Set(detail.tasks.filter((task) => task.capabilityId === capability.id).map((task) => task.id));
-        const last = detail.runs.filter((run) => taskIds.has(run.taskId) && run.verificationSummary)
-          .sort((a, b) => Date.parse(b.submittedAt ?? b.startedAt) - Date.parse(a.submittedAt ?? a.startedAt))[0];
-        return last?.status === 'SUBMITTED' && last.designSnapshotStatus === 'CURRENT'
-          && last.verificationSummary?.origin === 'CI' && last.verificationSummary.evidenceStatus === 'VERIFIED'
-          && last.verificationSummary.reportedStatus === 'PASS';
+        const last = detail.runs.filter((run) => taskIds.has(run.taskId))
+          .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0];
+        if (!last) return false;
+        const manual = this.currentManualReview(last)?.decision === 'PASS';
+        const independent = this.hasCurrentIndependentVerification(last);
+        if (manual) manualPassed += 1;
+        if (independent) independentPassed += 1;
+        return manual || independent;
       }).length;
       return {
         featureId: feature.id, status: feature.status,
@@ -826,11 +895,14 @@ export class WorkspaceService {
         latestReport: latest ? { runId: latest.id, submittedAt: latest.submittedAt,
           reportedStatus: latest.verificationSummary!.reportedStatus,
           origin: latest.verificationSummary!.origin, evidenceStatus: latest.verificationSummary!.evidenceStatus,
+          trustStatus: latest.verificationSummary!.trustStatus,
+          manualReview: latest.verificationSummary!.manualReview ?? null,
           designSnapshotStatus: latest.designSnapshotStatus,
           designSnapshotWarnings: latest.designSnapshotWarnings } : null,
         verificationCoverage: { passed, total: capabilities.length },
+        verificationSources: { manualPassed, independentPassed },
         currentVerification: capabilities.length > 0 && passed === capabilities.length ? 'PASS' : 'UNVERIFIED',
-        acceptance: feature.status === 'ACCEPTED' ? 'OWNER_MARKED_ACCEPTED' : 'NOT_RECORDED',
+        acceptance: feature.status === 'ACCEPTED' ? 'MARKED_ACCEPTED' : 'NOT_RECORDED',
       };
     });
   }
@@ -999,47 +1071,67 @@ export class WorkspaceService {
 
   getProjectLifecycle(projectId: string): ProjectLifecycle {
     const detail = this.getProject(projectId);
-    const documentStage = (kind: 'research' | 'requirements' | 'architecture' | 'technology', target: ProjectLifecycle['stages'][number]['target']) => {
+    const documentStage = (kind: 'background' | 'research' | 'requirements' | 'architecture' | 'technology', target: ProjectLifecycle['stages'][number]['target']) => {
       const specification = detail.specifications.find((item) => item.featureId === null && item.capabilityId === null && item.kind === kind);
-      const hasIssue = specification && detail.reviews.some((review) => review.specId === specification.id && review.status === 'CHANGES_REQUESTED');
-      return { status: hasIssue ? 'ISSUE' as const : specification?.latestRevisionId ? 'FORMED' as const : 'NOT_STARTED' as const,
-        summary: specification?.latestRevisionNumber ? `REV ${specification.latestRevisionNumber}` : '未开始', target };
+      const latest = specification?.latestRevisionId ? this.repository.findRevision(specification.id, specification.latestRevisionId) : null;
+      const issues = latest ? validateProjectDocument(kind, latest.markdown) : [];
+      const hasReviewIssue = Boolean(specification && latest && detail.reviews.some((review) => review.specId === specification.id
+        && review.revisionId === latest.id && review.status === 'CHANGES_REQUESTED'));
+      const hasIssue = hasReviewIssue || issues.length > 0;
+      return { status: hasIssue ? 'ISSUE' as const : latest ? 'FORMED' as const : 'NOT_STARTED' as const,
+        summary: latest ? `REV ${latest.revisionNo}${issues.length ? ` · 规则问题 ${issues.length} 项` : hasReviewIssue ? ' · 待修改' : ''}` : '未开始', target };
     };
     const total = detail.capabilities.length;
     const designed = detail.capabilities.filter((item) => item.status !== 'DRAFT').length;
     const done = detail.capabilities.filter((item) => item.status === 'DONE').length;
     const blocked = detail.capabilities.filter((item) => item.status === 'BLOCKED').length;
-    const passedCapabilityIds = new Set(detail.capabilities.filter((capability) => {
+    const latestRunByCapability = new Map(detail.capabilities.map((capability) => {
       const taskIds = new Set(detail.tasks.filter((task) => task.capabilityId === capability.id).map((task) => task.id));
-      const latest = detail.runs.filter((run) => taskIds.has(run.taskId) && run.verificationSummary)
+      const latest = detail.runs.filter((run) => taskIds.has(run.taskId))
         .sort((left, right) => Date.parse(right.submittedAt ?? right.startedAt) - Date.parse(left.submittedAt ?? left.startedAt))[0];
-      return latest?.status === 'SUBMITTED' && latest.designSnapshotStatus === 'CURRENT'
-        && latest.verificationSummary?.evidenceStatus === 'VERIFIED'
-        && latest.verificationSummary.origin === 'CI'
-        && latest.verificationSummary.reportedStatus === 'PASS';
+      return [capability.id, latest] as const;
+    }));
+    const manualPassed = detail.capabilities.filter((capability) => this.currentManualReview(latestRunByCapability.get(capability.id))?.decision === 'PASS').length;
+    const manualFailed = detail.capabilities.filter((capability) => this.currentManualReview(latestRunByCapability.get(capability.id))?.decision === 'FAIL').length;
+    const independentPassed = detail.capabilities.filter((capability) => {
+      const latest = latestRunByCapability.get(capability.id);
+      return Boolean(latest && this.hasCurrentIndependentVerification(latest));
+    }).length;
+    const passedCapabilityIds = new Set(detail.capabilities.filter((capability) => {
+      const latest = latestRunByCapability.get(capability.id);
+      return this.currentManualReview(latest)?.decision === 'PASS' || Boolean(latest && this.hasCurrentIndependentVerification(latest));
     }).map((capability) => capability.id));
     const accepted = detail.capabilities.filter((capability) =>
       detail.features.some((feature) => feature.id === capability.featureId && feature.status === 'ACCEPTED')).length;
     const engineeringCount = detail.engineeringAssets.filter((asset) => asset.kind !== 'PROJECT_DOCUMENT').length;
+    const background = documentStage('background', 'background');
     const research = documentStage('research', 'research');
     const requirements = documentStage('requirements', 'requirements');
-    const architecture = detail.specifications.find((item) => item.featureId === null && item.capabilityId === null && item.kind === 'architecture');
-    const technology = detail.specifications.find((item) => item.featureId === null && item.capabilityId === null && item.kind === 'technology');
+    const architecture = documentStage('architecture', 'architecture');
+    const technology = documentStage('technology', 'technology');
     const stages: ProjectLifecycle['stages'] = [
-      { ...research, key: 'discovery', label: '发现 / 调研' },
+      { key: 'discovery', label: '背景 / 调研',
+        status: background.status === 'ISSUE' || research.status === 'ISSUE' ? 'ISSUE'
+          : background.status === 'FORMED' && research.status === 'FORMED' ? 'FORMED'
+            : background.status === 'FORMED' || research.status === 'FORMED' ? 'IN_PROGRESS' : 'NOT_STARTED',
+        summary: `背景 ${background.status === 'ISSUE' ? '需修改' : background.status === 'FORMED' ? '✓' : '—'} · 调研 ${research.status === 'ISSUE' ? '需修改' : research.status === 'FORMED' ? '✓' : '—'}`,
+        target: background.status !== 'FORMED' ? 'background' : 'research' },
       { ...requirements, key: 'requirements', label: '需求定义' },
-      { key: 'decisions', label: '架构与技术决策', status: architecture?.latestRevisionId && technology?.latestRevisionId ? 'FORMED' : architecture?.latestRevisionId || technology?.latestRevisionId ? 'IN_PROGRESS' : 'NOT_STARTED', summary: `${architecture?.latestRevisionId ? '架构 ✓' : '架构 —'} · ${technology?.latestRevisionId ? '技术 ✓' : '技术 —'}`, target: 'architecture' },
+      { key: 'decisions', label: '架构与技术决策', status: architecture.status === 'ISSUE' || technology.status === 'ISSUE' ? 'ISSUE'
+        : architecture.status === 'FORMED' && technology.status === 'FORMED' ? 'FORMED'
+          : architecture.status === 'FORMED' || technology.status === 'FORMED' ? 'IN_PROGRESS' : 'NOT_STARTED',
+      summary: `架构 ${architecture.status === 'ISSUE' ? '需修改' : architecture.status === 'FORMED' ? '✓' : '—'} · 技术 ${technology.status === 'ISSUE' ? '需修改' : technology.status === 'FORMED' ? '✓' : '—'}`, target: 'architecture' },
       { key: 'breakdown', label: '功能分解', status: blocked ? 'ISSUE' : total === 0 ? 'NOT_STARTED' : designed ? 'FORMED' : 'IN_PROGRESS', summary: `${total} 个能力项`, target: 'features' },
       { key: 'engineering', label: '工程详细设计', status: blocked ? 'ISSUE' : engineeringCount === 0 ? 'NOT_STARTED' : detail.features.every((feature) => detail.engineeringAssets.some((asset) => asset.featureId === feature.id)) ? 'FORMED' : 'IN_PROGRESS', summary: `${engineeringCount} 个工程设计`, target: 'features' },
-      { key: 'implementation', label: '实施', status: blocked ? 'ISSUE' : total === 0 ? 'NOT_STARTED' : done === total ? 'FORMED' : detail.capabilities.some((item) => ['IMPLEMENTING', 'TESTING', 'DONE'].includes(item.status)) ? 'IN_PROGRESS' : 'NOT_STARTED', summary: `${done} / ${total} 已完成`, target: 'development' },
-      { key: 'verification', label: '当前设计核验', status: blocked ? 'ISSUE' : total === 0 ? 'NOT_STARTED' : passedCapabilityIds.size === total ? 'FORMED' : passedCapabilityIds.size ? 'IN_PROGRESS' : 'NOT_STARTED', summary: `${passedCapabilityIds.size} / ${total} 有当前核验`, target: 'testing' },
-      { key: 'complete', label: '负责人验收', status: total > 0 && done === total && passedCapabilityIds.size === total && accepted === total ? 'FORMED' : blocked ? 'ISSUE' : 'NOT_STARTED', summary: `${accepted} / ${total} 已验收`, target: 'overview' },
+      { key: 'implementation', label: '实施记录', status: blocked ? 'ISSUE' : total === 0 ? 'NOT_STARTED' : done === total ? 'FORMED' : detail.capabilities.some((item) => ['IMPLEMENTING', 'TESTING', 'DONE'].includes(item.status)) ? 'IN_PROGRESS' : 'NOT_STARTED', summary: `${done} / ${total} 标记已实施，需核验`, target: 'development' },
+      { key: 'verification', label: '当前设计核验', status: blocked || manualFailed ? 'ISSUE' : total === 0 ? 'NOT_STARTED' : passedCapabilityIds.size === total ? 'FORMED' : passedCapabilityIds.size ? 'IN_PROGRESS' : 'NOT_STARTED', summary: `${passedCapabilityIds.size} / ${total} 有当前记录 · 本机复核 ${manualPassed} · 独立 CI ${independentPassed}`, target: 'testing' },
+      { key: 'complete', label: '验收记录', status: total > 0 && done === total && passedCapabilityIds.size === total && accepted === total ? 'FORMED' : blocked || manualFailed ? 'ISSUE' : 'NOT_STARTED', summary: `${accepted} / ${total} 已标记验收`, target: 'overview' },
     ];
     const currentStage = (stages.find((stage) => stage.status === 'ISSUE')
       ?? stages.find((stage) => stage.status === 'IN_PROGRESS')
       ?? stages.find((stage) => stage.status === 'NOT_STARTED')
       ?? stages.at(-1)!).key;
-    return { currentStage, stages };
+    return { currentStage, stages, manualReview: { passed: manualPassed, failed: manualFailed } };
   }
 
   listModules(projectId: string): Module[] {
@@ -1150,6 +1242,9 @@ export class WorkspaceService {
     code: string; name: string; summary: string; status?: CapabilityStatus; sortOrder: number;
   }): Capability {
     const feature = this.requireFeature(projectId, featureId);
+    if (input.status && input.status !== 'DRAFT') {
+      throw new ApiError(409, 'CAPABILITY_STATUS_MANAGED', '新建能力项须从 DRAFT 开始；实施状态由设计与 Task/Run 流程计算');
+    }
     const now = new Date();
     const capability = { id: randomUUID(), projectId, moduleId: feature.moduleId, featureId,
       code: input.code, name: input.name, summary: input.summary, status: input.status ?? 'DRAFT',
@@ -1166,6 +1261,9 @@ export class WorkspaceService {
 
   updateCapability(projectId: string, featureId: string, capabilityId: string, input: Partial<Pick<Capability, 'code' | 'name' | 'summary' | 'status' | 'sortOrder'>>): Capability {
     const current = this.requireCapability(projectId, featureId, capabilityId);
+    if (input.status && input.status !== current.status) {
+      throw new ApiError(409, 'CAPABILITY_STATUS_MANAGED', '能力项实施状态由设计与 Task/Run 流程计算，不能直接修改');
+    }
     const values = { ...Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)), updatedAt: new Date() };
     try {
       this.repository.updateCapability(projectId, capabilityId, values);
@@ -1525,11 +1623,19 @@ export class WorkspaceService {
 
   updateTask(projectId: string, featureId: string, taskId: string, input: Partial<Pick<Task, 'code' | 'name' | 'type' | 'category' | 'area' | 'capabilityId' | 'status' | 'objective' | 'sortOrder' | 'designRevisionId'>>): Task {
     const current = this.requireTask(projectId, featureId, taskId);
+    const runExists = this.repository.listRuns(projectId, taskId).length > 0;
+    const immutableKeys = ['code', 'name', 'type', 'category', 'area', 'capabilityId', 'objective', 'designRevisionId'] as const;
+    const changedIdentity = immutableKeys.filter((key) => input[key] !== undefined && input[key] !== current[key]);
+    if (runExists && changedIdentity.length) {
+      throw new ApiError(409, 'TASK_RUN_HISTORY_IMMUTABLE', 'Task 已有 Run，执行目标与归属不可改写；请新建 Task', { fields: changedIdentity });
+    }
     if (input.capabilityId) this.requireCapability(projectId, featureId, input.capabilityId);
     const nextType = input.type ?? current.type;
     const nextCapabilityId = input.capabilityId === undefined ? current.capabilityId : input.capabilityId;
     const nextDesignRevisionId = input.designRevisionId === undefined ? current.designRevisionId : input.designRevisionId;
-    if (nextDesignRevisionId !== null) this.requireApprovedDesignBaseline(projectId, featureId, nextCapabilityId, nextDesignRevisionId);
+    if (!runExists && nextDesignRevisionId !== null) {
+      this.requireApprovedDesignBaseline(projectId, featureId, nextCapabilityId, nextDesignRevisionId);
+    }
     if (input.status && input.status !== current.status) {
       const allowed = (current.status === 'PLANNED' && input.status === 'AUTHORIZED')
         || (current.status === 'AUTHORIZED' && input.status === 'PLANNED');
@@ -1615,7 +1721,13 @@ export class WorkspaceService {
   }
 
   private normalizeSourceExecutions(projectId: string, executions: RunSourceExecution[], existing?: RunSourceExecution[]): RunSourceExecution[] {
-    if (executions.length > 100) throw new ApiError(400, 'INVALID_SOURCE_EXECUTIONS', '一次 Run 最多关联 100 个 Source');
+    const parsed = z.array(runSourceExecutionSchema).max(100).safeParse(executions);
+    if (!parsed.success) {
+      throw new ApiError(400, 'INVALID_SOURCE_EXECUTIONS', '源码执行快照字段不合法', {
+        issues: parsed.error.issues.slice(0, 5).map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
+      });
+    }
+    executions = parsed.data;
     const seen = new Set<string>();
     return executions.map((execution) => {
       if (seen.has(execution.sourceId)) throw new ApiError(400, 'DUPLICATE_RUN_SOURCE', '同一 Run 中 Source 不能重复');
@@ -1677,7 +1789,9 @@ export class WorkspaceService {
           throw new ApiError(409, 'RUN_ALREADY_RUNNING', '该 Task 已有 RUNNING Run');
         }
         const now = new Date();
-        const designSnapshot = this.buildDesignSnapshot(projectId, featureId, task);
+        // AUTO retries follow the current design; the Run snapshot preserves exactly what this execution used.
+        // A Task with earlier Runs keeps its original designRevisionId for historical attribution.
+        const designSnapshot = this.buildDesignSnapshot(projectId, featureId, task, !isAuto);
         const sourceExecutions = this.normalizeSourceExecutions(projectId, input.sourceExecutions ?? []);
         const run = {
           id: randomUUID(), projectId, featureId, taskId, authorizationId: authorization?.id ?? null,
@@ -1692,10 +1806,11 @@ export class WorkspaceService {
           throw new ApiError(409, 'TASK_STATE_CONFLICT', 'Task 状态已变化');
         }
         const designRevisionId = this.resolveImplementationRevisionId(task);
-        if (designRevisionId && task.designRevisionId !== designRevisionId) {
+        if (designRevisionId && task.designRevisionId !== designRevisionId
+          && this.repository.listRuns(projectId, taskId).length === 1) {
           this.repository.updateTask(projectId, featureId, taskId, { designRevisionId });
         }
-        if (task.capabilityId) this.setCapabilityStatus(projectId, task.capabilityId, 'IMPLEMENTING');
+        if (task.capabilityId) this.recomputeCapabilityStatus(projectId, task.capabilityId);
         return this.runView(run);
       });
     } catch (error) {
@@ -1712,7 +1827,9 @@ export class WorkspaceService {
       throw new ApiError(409, 'INVALID_RUN_PHASE', 'Run 阶段不能回退');
     }
     const task = this.repository.findTaskById(run.taskId);
-    if (phase === 'TESTING' && task?.capabilityId) this.setCapabilityStatus(projectId, task.capabilityId, 'TESTING');
+    if (phase === 'TESTING' && task?.capabilityId && isImplementationTask(task)) {
+      this.setCapabilityStatus(projectId, task.capabilityId, 'TESTING');
+    }
     const updatedAt = new Date();
     if (this.repository.updateRun(runId, 'RUNNING', { phase, updatedAt }) !== 1) {
       throw new ApiError(409, 'RUN_NOT_RUNNING', 'Run 状态已变化');
@@ -1725,6 +1842,9 @@ export class WorkspaceService {
     verificationSummary: { reportedStatus: RunReportedStatus; summary: string; origin: RunVerificationOrigin }; issues: string[];
     sourceExecutions?: RunSourceExecution[];
   }): AiRun {
+    if (!['AI_REPORTED', 'HUMAN'].includes(input.verificationSummary.origin)) {
+      throw new ApiError(403, 'VERIFICATION_ORIGIN_RESERVED', 'CI 或本地捕获结果只能由独立核验流程写入');
+    }
     return this.repository.transaction(() => {
       const run = this.requireRun(projectId, runId);
       if (run.status !== 'RUNNING') throw new ApiError(409, 'RUN_NOT_RUNNING', '只有 RUNNING Run 可以提交');
@@ -1742,12 +1862,26 @@ export class WorkspaceService {
       const sourceExecutions = input.sourceExecutions
         ? this.normalizeSourceExecutions(projectId, input.sourceExecutions, storedSourceExecutions)
         : storedSourceExecutions;
+      if (isAuto && passed) {
+        const checkedSources = sourceExecutions.filter((execution) => execution.read
+          && Boolean(execution.baseline.commit || execution.baseline.manifestHash)
+          && execution.verification.some((check) => check.reportedStatus === 'PASS'
+            && check.command.length > 0 && check.workdir.length > 0 && check.summary.length > 0));
+        const checkedIds = new Set(checkedSources.map((execution) => execution.sourceId));
+        const linkedFiles = changedFiles.filter((file) => typeof file !== 'string' && checkedIds.has(file.sourceId));
+        const needsSourceCheck = !isPureDesignOrContentTask(task);
+        const needsChange = isImplementationTask(task);
+        if ((needsSourceCheck && !checkedSources.length) || (needsChange && !linkedFiles.length)) {
+          throw new ApiError(422, 'RUN_PASS_EVIDENCE_REQUIRED',
+            '实施和核验 Task 的 PASS 报告须关联有源码基线的 Source 检查；实施任务还须引用该 Source 的修改文件',
+            { needsSourceCheck: needsSourceCheck && !checkedSources.length, needsChangedFile: needsChange && !linkedFiles.length });
+        }
+      }
       const verificationSummary: RunVerificationSummary = {
         status: input.verificationSummary.reportedStatus,
         reportedStatus: input.verificationSummary.reportedStatus,
         origin: input.verificationSummary.origin,
-        evidenceStatus: input.verificationSummary.origin === 'AI_REPORTED' ? 'REPORTED'
-          : input.verificationSummary.origin === 'LOCAL_CAPTURED' ? 'CAPTURED' : 'VERIFIED',
+        evidenceStatus: input.verificationSummary.origin === 'LOCAL_CAPTURED' ? 'CAPTURED' : 'REPORTED',
         summary: input.verificationSummary.summary,
       };
       const values = {
@@ -1763,6 +1897,92 @@ export class WorkspaceService {
       }
       if (task.capabilityId) this.recomputeCapabilityStatus(projectId, task.capabilityId);
       return this.runView({ ...run, ...values });
+    });
+  }
+
+  recordManualReview(projectId: string, runId: string, input: {
+    decision: RunManualReview['decision']; summary: string; evidenceRefs: RunManualReview['evidenceRefs'];
+    recordedBy: Exclude<RunManualReview['recordedBy'], 'IMPORTED'>;
+  }): AiRun {
+    if (!['PASS', 'FAIL'].includes(input.decision) || !['OWNER', 'LOCAL_WEB'].includes(input.recordedBy)) {
+      throw new ApiError(400, 'INVALID_MANUAL_REVIEW', '本机复核结论或来源不合法');
+    }
+    return this.repository.transaction(() => {
+      const run = this.requireRun(projectId, runId);
+      if (run.status !== 'SUBMITTED') throw new ApiError(409, 'RUN_NOT_SUBMITTED', '只有已提交的 Run 可以记录本机复核');
+      if (this.repository.listRuns(projectId, run.taskId)[0]?.id !== run.id) {
+        throw new ApiError(409, 'RUN_NOT_LATEST', '只能复核该 Task 的最近一次 Run；请在最新执行上记录结论');
+      }
+      if (this.runFreshness(run).status !== 'CURRENT') {
+        throw new ApiError(409, 'RUN_DESIGN_STALE', '设计版本已变化，请按当前设计重新执行后复核');
+      }
+      const task = this.requireTask(projectId, run.featureId, run.taskId);
+      const isAuto = this.requireProject(projectId).workflowMode === 'AUTO';
+      if (isAuto ? !['DONE', 'BLOCKED'].includes(task.status) : task.status !== 'SUBMITTED') {
+        throw new ApiError(409, 'TASK_NOT_REVIEWABLE', isAuto
+          ? 'Task 当前不可复核；请先完成最近一次 Run'
+          : 'Task 已离开待确认状态；如需重新复核，请新建 Task 并完成授权执行');
+      }
+      const verification = parseJson<RunVerificationSummary | null>(run.verificationSummary, null);
+      if (!verification) throw new ApiError(409, 'RUN_REPORT_REQUIRED', 'Run 尚无可复核的执行报告');
+      if (verification.manualReview) throw new ApiError(409, 'MANUAL_REVIEW_EXISTS',
+        isAuto ? '该 Run 的复核记录不可覆盖；如需改判，请新建 Task 重新执行'
+          : '该 Run 的复核记录不可覆盖；如需改判，请新建 Task 并完成授权执行');
+      if (input.decision === 'PASS' && verification.reportedStatus !== 'PASS') {
+        throw new ApiError(409, 'MANUAL_REVIEW_REPORT_CONFLICT', '执行报告未通过时不能将同一 Run 复核为 PASS；请重新执行');
+      }
+      if (input.decision === 'PASS' && parseJson<string[]>(run.issues, []).length > 0) {
+        throw new ApiError(409, 'MANUAL_REVIEW_RUN_ISSUES', 'Run 仍有未解决问题，不能复核为 PASS；请重新执行');
+      }
+      if (input.decision === 'PASS' && isAuto && task.status !== 'DONE') {
+        throw new ApiError(409, 'TASK_NOT_REVIEWABLE', 'Task 尚未报告完成，不能复核为 PASS');
+      }
+      const summary = input.summary.trim();
+      if (!summary || summary.length > 2000) throw new ApiError(400, 'INVALID_MANUAL_REVIEW', '复核说明须为 1–2000 个字符');
+      if (!Array.isArray(input.evidenceRefs) || input.evidenceRefs.length < 1 || input.evidenceRefs.length > 25) {
+        throw new ApiError(400, 'MANUAL_REVIEW_EVIDENCE_REQUIRED', '本机复核须有 1–25 条可回查的 Source 文件或 HTTPS 证据引用');
+      }
+      const runSources = new Set(parseJson<RunSourceExecution[]>(run.sourceExecutionsJson, []).map((item) => item.sourceId));
+      for (const file of parseJson<RunChangedFile[]>(run.changedFiles, [])) {
+        if (typeof file !== 'string') runSources.add(file.sourceId);
+      }
+      const evidenceRefs = input.evidenceRefs.map((reference) => {
+        if (reference.kind === 'SOURCE_FILE') {
+          const source = this.repository.findProjectSource(projectId, reference.sourceId);
+          if (!source || !runSources.has(source.id)) {
+            throw new ApiError(400, 'MANUAL_REVIEW_SOURCE_MISMATCH', 'Source 文件引用须属于该项目和本次 Run');
+          }
+          if (reference.relativePath.length > 1000) throw new ApiError(400, 'INVALID_MANUAL_REVIEW', 'Source 相对路径过长');
+          return { kind: 'SOURCE_FILE' as const, sourceId: source.id, relativePath: safeRunRelativePath(reference.relativePath) };
+        }
+        if (reference.kind !== 'HTTPS_URL' || typeof reference.url !== 'string' || reference.url.length > 2000) {
+          throw new ApiError(400, 'INVALID_MANUAL_REVIEW', '证据引用必须是 Source 相对路径或 HTTPS URL');
+        }
+        let url: URL;
+        try { url = new URL(reference.url.trim()); } catch { throw new ApiError(400, 'INVALID_MANUAL_REVIEW_URL', '证据 URL 无效'); }
+        if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) {
+          throw new ApiError(400, 'INVALID_MANUAL_REVIEW_URL', '证据 URL 必须是无内嵌凭据的 HTTPS 地址');
+        }
+        return { kind: 'HTTPS_URL' as const, url: url.toString() };
+      });
+      if (new Set(evidenceRefs.map(stableJson)).size !== evidenceRefs.length) {
+        throw new ApiError(400, 'DUPLICATE_MANUAL_REVIEW_EVIDENCE', '本机复核证据引用不能重复');
+      }
+      const manualReview: RunManualReview = {
+        decision: input.decision, summary, evidenceRefs, recordedBy: input.recordedBy, recordedAt: new Date().toISOString(),
+      };
+      const updatedAt = new Date();
+      const verificationSummary = JSON.stringify({ ...verification, manualReview });
+      if (this.repository.updateRun(runId, 'SUBMITTED', { verificationSummary, updatedAt }) !== 1) {
+        throw new ApiError(409, 'RUN_STATE_CONFLICT', 'Run 状态已变化');
+      }
+      if (isAuto && input.decision === 'FAIL' && task.status === 'DONE') {
+        if (this.repository.updateTaskStatus(projectId, run.featureId, run.taskId, 'DONE', 'BLOCKED', updatedAt) !== 1) {
+          throw new ApiError(409, 'TASK_STATE_CONFLICT', 'Task 状态已变化');
+        }
+        if (task.capabilityId) this.recomputeCapabilityStatus(projectId, task.capabilityId);
+      }
+      return this.runView({ ...run, verificationSummary, updatedAt });
     });
   }
 
@@ -1794,8 +2014,19 @@ export class WorkspaceService {
     return this.repository.transaction(() => {
       const task = this.requireTask(projectId, featureId, taskId);
       if (task.status !== 'SUBMITTED') throw new ApiError(409, 'TASK_NOT_SUBMITTED', '只有 SUBMITTED Task 可以确认完成');
-      if (!this.repository.listRuns(projectId, taskId).some((run) => run.status === 'SUBMITTED')) {
+      const latestRun = this.repository.listRuns(projectId, taskId)[0];
+      if (!latestRun || latestRun.status !== 'SUBMITTED') {
         throw new ApiError(409, 'SUBMITTED_RUN_NOT_FOUND', '没有可确认的 SUBMITTED Run');
+      }
+      const report = this.runView(latestRun);
+      if (report.verificationSummary?.reportedStatus !== 'PASS' || report.issues.length > 0) {
+        throw new ApiError(409, 'TASK_RUN_NOT_PASS', '最近一次 Run 未报告 PASS 或仍有问题，不能确认完成');
+      }
+      if (report.verificationSummary.manualReview?.decision === 'FAIL') {
+        throw new ApiError(409, 'TASK_MANUAL_REVIEW_FAILED', '本机复核未通过；请退回 Task，重新授权并执行');
+      }
+      if (report.designSnapshotStatus !== 'CURRENT') {
+        throw new ApiError(409, 'TASK_RUN_DESIGN_STALE', '最近一次 Run 的设计快照不是当前版本，请按当前设计重新执行');
       }
       const now = new Date();
       if (this.repository.updateTaskStatus(projectId, featureId, taskId, 'SUBMITTED', 'CONFIRMED', now) !== 1) {
@@ -1953,6 +2184,11 @@ export class WorkspaceService {
         throw new Error('Specification latest revision points outside its history');
       }
       assertUsefulAiDesign(input.content, input.source);
+      if (specification.featureId === null && specification.capabilityId === null) {
+        const issues = validateProjectDocument(specification.kind, input.content);
+        if (issues.length) throw new ApiError(422, 'DOCUMENT_RULE_VIOLATION',
+          `项目资料未通过规则：${issues.slice(0, 3).map((issue) => issue.message).join('；')}`, { issues });
+      }
       if (latest && latest.markdown.replace(/\r\n?/g, '\n').trim() === input.content.replace(/\r\n?/g, '\n').trim()) {
         throw new ApiError(409, 'REVISION_UNCHANGED', '设计正文没有变化，无需创建新版本');
       }
@@ -2080,14 +2316,17 @@ export class WorkspaceService {
     const capability = this.repository.findCapability(projectId, capabilityId);
     if (!capability) return;
     const capabilityTasks = this.repository.listTasks(projectId, capability.featureId).filter((task) => task.capabilityId === capabilityId);
+    const implementationTasks = capabilityTasks.filter(isImplementationTask);
+    const designStatus: CapabilityStatus = this.repository.findCapabilitySpecification(projectId, capabilityId)?.latestRevisionId
+      ? 'DESIGNED' : 'DRAFT';
     let status: CapabilityStatus;
     if (capabilityTasks.some((task) => task.status === 'BLOCKED')) status = 'BLOCKED';
-    else if (capabilityTasks.some((task) => task.status === 'RUNNING')) {
-      const runningIds = new Set(capabilityTasks.filter((task) => task.status === 'RUNNING').map((task) => task.id));
+    else if (implementationTasks.some((task) => task.status === 'RUNNING')) {
+      const runningIds = new Set(implementationTasks.filter((task) => task.status === 'RUNNING').map((task) => task.id));
       status = this.repository.listRuns(projectId).some((run) => runningIds.has(run.taskId) && run.status === 'RUNNING' && ['TESTING', 'SUBMITTING'].includes(run.phase)) ? 'TESTING' : 'IMPLEMENTING';
-    } else if (capabilityTasks.length > 0 && capabilityTasks.every((task) => ['DONE', 'CONFIRMED'].includes(task.status))) status = 'DONE';
-    else if (capabilityTasks.some((task) => ['DONE', 'CONFIRMED', 'SUBMITTED'].includes(task.status))) status = 'IMPLEMENTING';
-    else status = this.repository.findCapabilitySpecification(projectId, capabilityId)?.latestRevisionId ? 'DESIGNED' : 'DRAFT';
+    } else if (implementationTasks.length > 0 && capabilityTasks.every((task) => ['DONE', 'CONFIRMED'].includes(task.status))) status = 'DONE';
+    else if (implementationTasks.some((task) => ['DONE', 'CONFIRMED', 'SUBMITTED'].includes(task.status))) status = 'IMPLEMENTING';
+    else status = designStatus;
     this.setCapabilityStatus(projectId, capabilityId, status);
   }
 

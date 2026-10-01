@@ -46,8 +46,20 @@ test('Owner session and scoped AI Token persist and revoke without storing secre
   assert.equal(specResponse.statusCode, 201);
   const spec = specResponse.json<SpecificationSummary>();
   const specPath = `/api/projects/${project.id}/specifications/${spec.id}`;
+  const requirementContent = (title: string, detail: string) => `# ${title}
+
+## 用户任务与结果
+项目管理员需要登记并查询项目资料。用户输入项目标识和说明后，系统保存资料并返回可读取的版本；${detail}。
+
+## 失败与验收边界
+当标识重复或输入不完整时，接口返回明确错误，不覆盖已保存的资料。验收时应核对写入后的版本号、来源身份与再次读取的正文，并保留失败请求记录。
+
+来源：docs/project-requirements.md；本测试只检查提交身份与版本行为。`;
+  const ownerContent = requirementContent('Owner content', '首版建立登记与查询范围');
+  const aiContent = requirementContent('AI content', '第二版明确查询结果需要包含来源身份');
+  const rotatedContent = requirementContent('Rotated AI content', '第三版明确再次读取时仍能看到原始正文');
   const revisionResponse = await app.inject({ method: 'POST', url: `${specPath}/revisions`, headers: ownerHeaders,
-    payload: { content: '# Owner content', changeSummary: 'Initial', expectedHeadRevisionId: null, source: 'ai-token:forged' } });
+    payload: { content: ownerContent, changeSummary: 'Initial', expectedHeadRevisionId: null, source: 'ai-token:forged' } });
   assert.equal(revisionResponse.statusCode, 201);
   const revision = revisionResponse.json<SpecificationRevision>();
   assert.equal(revision.source, 'owner:1');
@@ -70,7 +82,7 @@ test('Owner session and scoped AI Token persist and revoke without storing secre
   const writer = writerResponse.json<CreatedAiToken>();
   const writeHeaders = { authorization: `Bearer ${writer.token}` };
   const aiRevision = await app.inject({ method: 'POST', url: `${specPath}/revisions`, headers: writeHeaders,
-    payload: { content: '# AI content', changeSummary: 'Updated', expectedHeadRevisionId: revision.id, source: 'owner:1' } });
+    payload: { content: aiContent, changeSummary: 'Updated', expectedHeadRevisionId: revision.id, source: 'owner:1' } });
   assert.equal(aiRevision.statusCode, 201);
   assert.equal(aiRevision.json<SpecificationRevision>().source, `ai-token:${writer.id}`);
   assert.equal((await app.inject({ method: 'GET', url: specPath, headers: writeHeaders })).statusCode, 403);
@@ -93,7 +105,7 @@ test('Owner session and scoped AI Token persist and revoke without storing secre
   assert.equal((await app.inject({ method: 'GET', url: specPath, headers: writeHeaders })).statusCode, 401);
   const rotatedHeaders = { authorization: `Bearer ${rotated.token}` };
   assert.equal((await app.inject({ method: 'POST', url: `${specPath}/revisions`, headers: rotatedHeaders,
-    payload: { content: '# Rotated AI content', changeSummary: 'Rotated', expectedHeadRevisionId: aiRevision.json<SpecificationRevision>().id } })).statusCode, 201);
+    payload: { content: rotatedContent, changeSummary: 'Rotated', expectedHeadRevisionId: aiRevision.json<SpecificationRevision>().id } })).statusCode, 201);
   const sqlite = new Database(path, { readonly: true });
   try {
     const ownerRow = sqlite.prepare('SELECT password_hash AS hash, password_salt AS salt FROM rd_owner').get() as { hash: string; salt: string };

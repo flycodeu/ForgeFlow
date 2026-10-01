@@ -61,7 +61,14 @@ const projectSchema = z.object({
     status: z.enum(['RUNNING', 'SUBMITTED', 'FAILED', 'ABORTED']), phase: z.enum(['PREPARING', 'IMPLEMENTING', 'TESTING', 'SUBMITTING']),
     baseCommit: small.nullable(), resultCommit: small.nullable(), summary: text, changedFiles: arr(changedFile),
     verificationSummary: z.object({ status: reported, reportedStatus: reported, evidenceStatus: z.enum(['UNVERIFIED', 'REPORTED', 'CAPTURED', 'VERIFIED']),
-      origin: z.enum(['AI_REPORTED', 'LOCAL_CAPTURED', 'CI', 'HUMAN']), summary: text }).strict().nullable(),
+      origin: z.enum(['AI_REPORTED', 'LOCAL_CAPTURED', 'CI', 'HUMAN']), summary: text,
+      trustStatus: z.enum(['REPORTED', 'HISTORICAL_UNATTESTED']).optional(),
+      manualReview: z.object({ decision: z.enum(['PASS', 'FAIL']), summary: text,
+        evidenceRefs: arr(z.discriminatedUnion('kind', [
+          z.object({ kind: z.literal('SOURCE_FILE'), sourceId: id, relativePath: small }).strict(),
+          z.object({ kind: z.literal('HTTPS_URL'), url: text }).strict(),
+        ])), recordedBy: z.enum(['OWNER', 'LOCAL_WEB', 'IMPORTED']), recordedAt: date }).strict().optional(),
+    }).strict().nullable(),
     designSnapshot: z.object({ specifications: arr(z.object({ specId: id, revisionId: id, revisionNo: num.positive() }).strict()),
       engineeringAssets: arr(z.object({ assetId: id, revisionId: id, revisionNo: num.positive() }).strict()) }).strict(),
     sourceExecutions: arr(z.object({ sourceId: id,
@@ -191,6 +198,15 @@ export function validateArchive(input: unknown): ProjectArchiveExport {
     }
     run.changedFiles.forEach((f) => { if (typeof f !== 'string') ref(f.sourceId, 'sources'); });
     run.sourceExecutions.forEach((s) => { ref(s.sourceId, 'sources'); s.changedFiles.forEach((f) => ref(f.sourceId,'sources')); });
+    for (const evidence of run.verificationSummary?.manualReview?.evidenceRefs ?? []) {
+      if (evidence.kind === 'SOURCE_FILE') ref(evidence.sourceId, 'sources');
+      else {
+        try {
+          const url = new URL(evidence.url);
+          if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) invalid('本机复核证据 URL 必须使用 HTTPS');
+        } catch { invalid('本机复核证据 URL 无效'); }
+      }
+    }
   }
   const sequences = new Set<number>();
   for (const event of a.events) {
@@ -248,6 +264,9 @@ export function restoreArchive(connection: Connection, input: ProjectArchiveRest
   const restored = remap(a) as ProjectArchiveExport;
   const p = restored.project;
   p.project.projectKey = envelope.data.projectKey; p.project.name = envelope.data.name;
+  for (const run of p.runs) {
+    if (run.verificationSummary?.manualReview) run.verificationSummary.manualReview.recordedBy = 'IMPORTED';
+  }
   for (const source of p.sources) source.locations = source.locations.map((location)=>({...location,normalizedLocalRoot:normalizeLocalRoot(location.localRoot)}));
   connection.sqlite.transaction(() => {
     if (connection.sqlite.prepare('SELECT 1 FROM rd_project WHERE project_key = ?').get(p.project.projectKey)) throw new ApiError(409,'PROJECT_KEY_EXISTS','新项目标识已存在');

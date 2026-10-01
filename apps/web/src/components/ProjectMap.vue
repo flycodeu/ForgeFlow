@@ -19,7 +19,7 @@ const selectedNodeId = ref('');
 
 const featureStatus: Record<Feature['status'], string> = {
   DRAFT: '草稿', DESIGNING: '设计中', READY: '待实施', IMPLEMENTING: '实施中',
-  VERIFYING: '验证中', ACCEPTANCE_PENDING: '待验收', ACCEPTED: '已验收', DELIVERED: '交付标记（待核对）',
+  VERIFYING: '验证中', ACCEPTANCE_PENDING: '待验收', ACCEPTED: '已标记验收', DELIVERED: '交付标记（待核对）',
 };
 const capabilityStatus: Record<Capability['status'], string> = {
   DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中',

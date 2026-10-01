@@ -4,6 +4,7 @@ import type {
   AiRun, Capability, CapabilityDetail, EngineeringAsset, EngineeringAssetRevision, Feature, FeatureEngineeringBlueprint, Project, ProjectDetail, SpecificationDetail, Task, TraceLink,
 } from '@forgeflow/contracts';
 import { api as getJson } from '../api-client';
+import { currentLocalReviewVerdict, latestRun, runVerificationLabel, runVerificationTone, taskImplementationLabel } from '../evidence-status';
 import ArchiveMarkdown from './ArchiveMarkdown.vue';
 import CapabilityDesignView from './CapabilityDesignView.vue';
 import SqlDataModelView from './SqlDataModelView.vue';
@@ -79,12 +80,11 @@ const capabilityRuns = computed(() => {
 });
 function currentCheckCount(capabilityId: string) {
   const taskIds = new Set(tasks.value.filter((task) => task.capabilityId === capabilityId).map((task) => task.id));
-  const latest = new Map(runs.value.filter((run) => taskIds.has(run.taskId) && run.verificationSummary)
-    .sort((a, b) => new Date(a.finishedAt ?? a.createdAt).getTime() - new Date(b.finishedAt ?? b.createdAt).getTime())
-    .map((run) => [run.taskId, run]));
-  return [...latest.values()].filter((run) => run.designSnapshotStatus === 'CURRENT'
-    && run.verificationSummary?.origin === 'CI' && run.verificationSummary.evidenceStatus === 'VERIFIED'
-    && run.verificationSummary.reportedStatus === 'PASS').length;
+  const taskRuns = runs.value.filter((run) => taskIds.has(run.taskId));
+  return [...taskIds].filter((taskId) => {
+    const run = latestRun(taskRuns.filter((item) => item.taskId === taskId));
+    return run && currentLocalReviewVerdict(run) === 'PASS';
+  }).length;
 }
 const traceLinks = computed(() => {
   const ids = new Set([selectedId.value, ...capabilityTasks.value.map((item) => item.id), ...capabilityRuns.value.map((item) => item.id)]);
@@ -105,11 +105,11 @@ function toggleNavBranch(key: string) {
   collapsedNavBranches.value = next;
 }
 function capabilityLabel(status: Capability['status']) {
-  return { DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中', TESTING: '验证中', DONE: '已完成', BLOCKED: '受阻' }[status];
+  return { DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中', TESTING: '验证中', DONE: '标记完成', BLOCKED: '受阻' }[status];
 }
 function featureStatusLabel(status: Feature['status']) {
   if (status === 'VERIFYING' && !runs.value.length) return '待验证';
-  return { DRAFT: '草稿', DESIGNING: '设计中', READY: '待实施', IMPLEMENTING: '实现中', VERIFYING: '验证中', ACCEPTANCE_PENDING: '待验收', ACCEPTED: '已验收', DELIVERED: '交付标记（待核对）' }[status];
+  return { DRAFT: '草稿', DESIGNING: '设计中', READY: '待实施', IMPLEMENTING: '实现中', VERIFYING: '验证中', ACCEPTANCE_PENDING: '待验收', ACCEPTED: '已标记验收', DELIVERED: '交付标记（待核对）' }[status];
 }
 function assetKindLabel(kind: string) {
   const labels: Record<string, string> = {
@@ -120,7 +120,7 @@ function assetKindLabel(kind: string) {
   return labels[kind] ?? kind.replaceAll('_', ' ');
 }
 function assetStatusLabel(status: string) {
-  return { DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中', TESTING: '验证中', DONE: '已完成', BLOCKED: '受阻' }[status] ?? status;
+  return { DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中', TESTING: '验证中', DONE: '标记完成', BLOCKED: '受阻' }[status] ?? status;
 }
 function keyLabel(key: string) {
   const labels: Record<string, string> = {
@@ -190,13 +190,13 @@ function traceRight(link: TraceLink) {
 function relationLabel(relation: string) {
   return { DERIVED_FROM: '来源于', IMPLEMENTS: '实现', DEPENDS_ON: '依赖', VERIFIED_BY: '由其验证', INTEGRATES_WITH: '集成' }[relation] ?? relation;
 }
-function taskStatus(task: Task) { return { PLANNED: '待实施', AUTHORIZED: '已就绪', RUNNING: '执行中', SUBMITTED: '已提交', CONFIRMED: '已确认', DONE: '已完成', BLOCKED: '受阻' }[task.status]; }
+function taskStatus(task: Task) {
+  if (task.status === 'DONE' || task.status === 'CONFIRMED') return taskImplementationLabel([task], runs.value.filter((run) => run.taskId === task.id));
+  return { PLANNED: '待实施', AUTHORIZED: '已就绪', RUNNING: '执行中', SUBMITTED: '已提交', BLOCKED: '受阻' }[task.status];
+}
 function runFileLabel(file: AiRun['changedFiles'][number]) { return typeof file === 'string' ? file : `${file.sourceId.slice(0, 8)} · ${file.relativePath}`; }
 function verificationLabel(run: AiRun) {
-  const verification = run.verificationSummary;
-  if (!verification) return '尚未报告';
-  if (verification.origin === 'AI_REPORTED') return verification.reportedStatus === 'PASS' ? 'AI报告通过' : `AI报告 ${verification.reportedStatus}`;
-  return `${verification.reportedStatus} · ${verification.origin}`;
+  return runVerificationLabel(run);
 }
 function sourceName(sourceId: string) { return props.detail.sources.find((source) => source.id === sourceId)?.alias ?? sourceId.slice(0, 8); }
 
@@ -395,21 +395,22 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
             <div class="capability-state" :data-status="selectedCapability.status"><span>当前状态</span><strong>{{ capabilityLabel(selectedCapability.status) }}</strong></div>
           </div>
           <section v-if="capabilityDetail?.design?.latestRevision?.content" class="design-card capability-design"><header><h3>操作设计</h3><span>REV {{ capabilityDetail.design.latestRevision.revisionNo }}</span></header><CapabilityDesignView :content="capabilityDetail.design.latestRevision.content" /></section>
-          <div class="capability-progress-line"><span>关联设计 {{ associatedAssets.length }}</span><span>实施任务 {{ capabilityTasks.length }}</span><span>当前 CI 核验 {{ currentCheckCount(selectedCapability.id) }} / {{ capabilityTasks.length }}</span></div>
+          <div class="capability-progress-line"><span>关联设计 {{ associatedAssets.length }}</span><span>实施任务 {{ capabilityTasks.length }}</span><span>当前本机复核通过 {{ currentCheckCount(selectedCapability.id) }} / {{ capabilityTasks.length }}</span></div>
+          <p v-if="!capabilityTasks.length && ['DONE', 'TESTING'].includes(selectedCapability.status)" class="implementation-gap">状态已标记，但尚无实施任务和执行记录；代码实现及核验尚待补充证据。</p>
           <section v-if="associatedAssets.length" class="design-card"><header><h3>关联设计</h3></header><div class="asset-link-grid"><button v-for="asset in associatedAssets" :key="asset.id" type="button" @click="selectItem('asset', asset.id)"><span>{{ assetKindLabel(asset.kind) }}</span><strong>{{ asset.name }}</strong></button></div></section>
-          <section v-if="capabilityTasks.length" class="design-card implementation-card"><header><h3>实现与验证</h3></header><div class="implementation-list"><article v-for="task in capabilityTasks" :key="task.id"><div><code>{{ task.code }}</code><strong>{{ task.name }}</strong><span :data-task-status="task.status">{{ taskStatus(task) }}</span></div><p>{{ task.objective }}</p><div v-for="run in capabilityRuns.filter(item => item.taskId === task.id)" :key="run.id" class="run-evidence"><span>执行记录 · {{ run.actorName }}</span><strong>{{ verificationLabel(run) }}</strong><code>{{ run.resultCommit ?? '尚无提交' }}</code><small>{{ run.changedFiles.map(runFileLabel).join(' · ') || '尚无文件记录' }}</small><p>{{ run.verificationSummary?.summary ?? run.summary }}</p></div></article></div></section>
+          <section v-if="capabilityTasks.length" class="design-card implementation-card"><header><h3>实现与验证</h3></header><div class="implementation-list"><article v-for="task in capabilityTasks" :key="task.id"><div><code>{{ task.code }}</code><strong>{{ task.name }}</strong><span :data-task-status="task.status">{{ taskStatus(task) }}</span></div><p>{{ task.objective }}</p><div v-for="run in capabilityRuns.filter(item => item.taskId === task.id)" :key="run.id" class="run-evidence"><span>执行记录 · {{ run.actorName }}</span><strong :class="runVerificationTone(run)">{{ verificationLabel(run) }}</strong><code>{{ run.resultCommit ?? '尚无提交' }}</code><small>{{ run.changedFiles.map(runFileLabel).join(' · ') || '尚无文件记录' }}</small><p>{{ run.verificationSummary?.summary ?? run.summary }}</p></div></article></div></section>
           <details v-if="traceLinks.length" class="design-card trace-card"><summary>来源与追踪 <span>{{ traceLinks.length }} 条关系</span></summary><div class="trace-list"><div v-for="link in traceLinks" :key="link.id"><strong>{{ traceLeft(link) }}</strong><span>{{ relationLabel(link.relation) }}</span><strong>{{ traceRight(link) }}</strong></div></div></details>
         </template>
 
         <template v-else-if="selectedType === 'plan'">
           <div class="detail-heading"><div><h2>开发计划</h2></div></div>
-          <section class="design-card"><header><h3>能力项实施计划</h3><span>{{ tasks.length }} 项任务</span></header><div class="plan-table"><div class="plan-row head"><span>能力项</span><span>实施任务</span><span>领域</span><span>状态</span><span>当前 CI 核验</span></div><div v-for="capability in capabilities" :key="capability.id" class="plan-row"><span><code>{{ capability.code }}</code> {{ capability.name }}</span><span>{{ tasks.find(item => item.capabilityId === capability.id)?.name ?? '待规划' }}</span><span>{{ tasks.find(item => item.capabilityId === capability.id)?.area || '—' }}</span><span>{{ capabilityLabel(capability.status) }}</span><span>{{ currentCheckCount(capability.id) }} / {{ tasks.filter(task => task.capabilityId === capability.id).length }}</span></div></div></section>
+          <section class="design-card"><header><h3>能力项实施计划</h3><span>{{ tasks.length }} 项任务</span></header><div class="plan-table"><div class="plan-row head"><span>能力项</span><span>实施任务</span><span>领域</span><span>状态</span><span>当前本机复核通过</span></div><div v-for="capability in capabilities" :key="capability.id" class="plan-row"><span><code>{{ capability.code }}</code> {{ capability.name }}</span><span>{{ tasks.find(item => item.capabilityId === capability.id)?.name ?? '待规划' }}</span><span>{{ tasks.find(item => item.capabilityId === capability.id)?.area || '—' }}</span><span>{{ capabilityLabel(capability.status) }}</span><span>{{ currentCheckCount(capability.id) }} / {{ tasks.filter(task => task.capabilityId === capability.id).length }}</span></div></div></section>
         </template>
 
         <template v-else>
           <div class="detail-heading"><div><h2>验证设计与执行结果</h2></div></div>
           <section v-for="asset in assets.filter(item => item.kind === 'TEST_DESIGN')" :key="asset.id" class="design-card table-card"><header><h3>{{ asset.name }}</h3><span>{{ assetStatusLabel(asset.status) }}</span></header><div class="table-scroll"><table v-for="table in buildTables(asset.structuredData ?? {})" :key="table.title"><thead><tr><th v-for="column in table.columns" :key="column">{{ column }}</th></tr></thead><tbody><tr v-for="(row, ri) in table.rows" :key="ri"><td v-for="(cell, ci) in row" :key="ci">{{ cell }}</td></tr></tbody></table></div></section>
-      <section class="design-card run-snapshot-card"><header><h3>任务执行与设计快照</h3><span>{{ visibleRuns.length }} 次运行</span></header><div class="run-snapshot-list"><article v-for="(run, index) in visibleRuns" :key="run.id"><header><div><span>RUN-{{ String(visibleRuns.length - index).padStart(3, '0') }}</span><strong>{{ run.summary || '执行中' }}</strong></div><div><b :data-freshness="run.designSnapshotStatus">{{ run.designSnapshotStatus === 'STALE' ? '设计已变更' : run.designSnapshotStatus === 'CURRENT' ? '当前设计' : '未冻结' }}</b><em>{{ verificationLabel(run) }}</em></div></header><div class="snapshot-grid"><section><h4>设计快照</h4><p v-for="spec in run.designSnapshot.specifications" :key="spec.revisionId"><span>设计资料</span><code>REV {{ spec.revisionNo }}</code><small>{{ spec.revisionId.slice(0, 8) }}</small></p><p v-for="asset in run.designSnapshot.engineeringAssets" :key="asset.revisionId"><span>{{ assets.find(item => item.id === asset.assetId)?.name ?? '工程设计' }}</span><code>REV {{ asset.revisionNo }}</code><small>{{ asset.revisionId.slice(0, 8) }}</small></p><i v-for="warning in run.designSnapshotWarnings" :key="warning">{{ warning }}</i></section><section><h4>多源码执行快照</h4><div v-for="execution in run.sourceExecutions" :key="execution.sourceId" class="source-snapshot"><strong>{{ sourceName(execution.sourceId) }}</strong><span>基线 {{ execution.baseline.commit ?? execution.baseline.manifestHash ?? execution.baseline.kind }}</span><span>结果 {{ execution.result.commit ?? execution.result.workingTreeSummary ?? '无提交' }}</span><small>{{ execution.read ? '已读取' : '未读取' }} · {{ execution.modified ? '已修改' : '未修改' }}</small><code v-for="file in execution.changedFiles" :key="runFileLabel(file)">{{ runFileLabel(file) }}</code><em v-for="verification in execution.verification" :key="`${verification.workdir}:${verification.command}`">{{ verification.reportedStatus }} · {{ verification.workdir }} · {{ verification.command }}</em></div><p v-if="!run.sourceExecutions.length" class="empty-copy">本次执行未关联 Source。</p></section></div></article></div></section>
+      <section class="design-card run-snapshot-card"><header><h3>任务执行与设计快照</h3><span>{{ visibleRuns.length }} 次运行</span></header><div class="run-snapshot-list"><article v-for="(run, index) in visibleRuns" :key="run.id"><header><div><span>RUN-{{ String(visibleRuns.length - index).padStart(3, '0') }}</span><strong>{{ run.summary || '执行中' }}</strong></div><div><b :data-freshness="run.designSnapshotStatus">{{ run.designSnapshotStatus === 'STALE' ? '设计已变更' : run.designSnapshotStatus === 'CURRENT' ? '当前设计' : '未冻结' }}</b><em :class="runVerificationTone(run)">{{ verificationLabel(run) }}</em></div></header><div class="snapshot-grid"><section><h4>设计快照</h4><p v-for="spec in run.designSnapshot.specifications" :key="spec.revisionId"><span>设计资料</span><code>REV {{ spec.revisionNo }}</code><small>{{ spec.revisionId.slice(0, 8) }}</small></p><p v-for="asset in run.designSnapshot.engineeringAssets" :key="asset.revisionId"><span>{{ assets.find(item => item.id === asset.assetId)?.name ?? '工程设计' }}</span><code>REV {{ asset.revisionNo }}</code><small>{{ asset.revisionId.slice(0, 8) }}</small></p><i v-for="warning in run.designSnapshotWarnings" :key="warning">{{ warning }}</i></section><section><h4>多源码执行快照</h4><div v-for="execution in run.sourceExecutions" :key="execution.sourceId" class="source-snapshot"><strong>{{ sourceName(execution.sourceId) }}</strong><span>基线 {{ execution.baseline.commit ?? execution.baseline.manifestHash ?? execution.baseline.kind }}</span><span>结果 {{ execution.result.commit ?? execution.result.workingTreeSummary ?? '无提交' }}</span><small>{{ execution.read ? '已读取' : '未读取' }} · {{ execution.modified ? '已修改' : '未修改' }}</small><code v-for="file in execution.changedFiles" :key="runFileLabel(file)">{{ runFileLabel(file) }}</code><em v-for="verification in execution.verification" :key="`${verification.workdir}:${verification.command}`">{{ verification.reportedStatus }} · {{ verification.workdir }} · {{ verification.command }}</em></div><p v-if="!run.sourceExecutions.length" class="empty-copy">本次执行未关联 Source。</p></section></div></article></div></section>
         </template>
       </main>
     </div>
@@ -550,6 +551,7 @@ watch(() => [props.feature.id, props.initialCapabilityId], () => { selectedId.va
 .trace-card > summary span { color: var(--muted); font-size: 12px; font-weight: 400; }
 .trace-card[open] > summary { border-bottom: 1px solid var(--line); }
 .capability-progress-line { display: flex; flex-wrap: wrap; gap: 8px 18px; max-width: 1200px; margin: -4px auto 18px; color: var(--muted); font-size: 12px; }
+.implementation-gap { max-width: 1200px; margin: 0 auto 18px; padding: 10px 14px; border: 1px solid #fcd34d; border-radius: 8px; background: #fffbeb; color: #92400e; font-size: 12.5px; }
 .design-card > header { display: flex; min-height: 46px; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--surface-subtle); }
 .design-card > header h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink); }
 .design-card > header span { color: var(--muted); font-size: 12px; }
@@ -574,7 +576,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .implementation-list > article > p { color: var(--muted); font-size: 13.5px; margin: 4px 0 0; }
 .run-evidence { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr); gap: 8px 14px; margin-top: 12px; padding: 12px 14px; border-radius: 8px; background: var(--surface-subtle); border: 1px solid var(--surface-subtle); }
 .run-evidence span, .run-evidence strong, .run-evidence code { font-size: 12.5px; }
-.run-evidence strong { color: var(--primary); }
+.run-evidence strong { color: var(--ink-secondary); }
+.run-evidence strong.pass { color: #047857; }
+.run-evidence strong.fail { color: #b91c1c; }
 .run-evidence small { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .run-evidence p { grid-column: 1 / -1; margin: 0; color: var(--ink-secondary); font-size: 13px; }
 .trace-list { padding: 6px 20px 14px; }
@@ -594,6 +598,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .run-snapshot-list header span { color: var(--primary); font: 700 12.5px var(--mono); }
 .run-snapshot-list header strong { font-size: 14.5px; font-weight: 600; color: var(--ink); }
 .run-snapshot-list header b, .run-snapshot-list header em { padding: 3px 8px; border-radius: 4px; background: var(--primary-subtle); color: var(--primary-hover); font-size: 11.5px; font-style: normal; font-weight: 600; }
+.run-snapshot-list header em { background: var(--surface-subtle); color: var(--ink-secondary); }
+.run-snapshot-list header em.pass { background: #ecfdf5; color: #047857; }
+.run-snapshot-list header em.fail { background: #fef2f2; color: #b91c1c; }
 .run-snapshot-list header b[data-freshness="STALE"] { background: #fffbeb; color: #b45309; }
 .run-snapshot-list header b[data-freshness="UNKNOWN"] { background: var(--surface-subtle); color: var(--muted); }
 .snapshot-grid { display: grid; grid-template-columns: 1fr 1.2fr; gap: 14px; }

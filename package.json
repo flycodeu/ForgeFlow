@@ -1,7 +1,7 @@
 {
   "name": "forgeflow",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "packageManager": "pnpm@11.18.0",
   "engines": {
     "node": ">=24 <25"
@@ -23,7 +23,7 @@
     "db:generate": "node scripts/generate-migration.mjs",
     "db:migrate": "pnpm --filter @forgeflow/server db:migrate",
     "seed:demo": "pnpm --filter @forgeflow/server seed:demo",
-    "test": "node --test apps/web/src/components/project-map.test.mjs && pnpm --filter @forgeflow/server test && pnpm test:scripts"
+    "test": "node --test apps/web/src/components/project-map.test.mjs apps/web/src/evidence-status.test.mjs && pnpm --filter @forgeflow/server test && pnpm test:scripts"
   },
   "devDependencies": {
     "drizzle-kit": "0.31.10",

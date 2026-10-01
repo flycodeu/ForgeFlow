@@ -198,8 +198,11 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   } })).json<AiRun>();
   assert.equal((await send({ method: 'POST', url: `${projectPath}/runs/${returnRun.id}/submit`, payload: {
     summary: '等待人工确认', resultCommit: null, changedFiles: [],
-    verificationSummary: { status: 'NOT_RUN', summary: '未执行验证' }, issues: [],
+    verificationSummary: { status: 'FAIL', summary: '集成测试失败' }, issues: [],
   } })).statusCode, 200);
+  const rejectedConfirmation = await send({ method: 'POST', url: `${returnTaskPath}/confirm` });
+  assert.equal(rejectedConfirmation.statusCode, 409);
+  assert.equal(rejectedConfirmation.json<{ error: { code: string } }>().error.code, 'TASK_RUN_NOT_PASS');
   assert.equal((await send({ method: 'POST', url: `${returnTaskPath}/return` })).json<Task>().status, 'AUTHORIZED');
   const revokedAuthorization = (await send({ method: 'POST', url: `${returnTaskPath}/authorizations` })).json<TaskAuthorization>();
   assert.equal((await send({ method: 'POST', url: `${returnTaskPath}/authorizations/${revokedAuthorization.id}/revoke` })).json<TaskAuthorization>().status, 'REVOKED');
@@ -223,9 +226,20 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   assert.equal(spec.featureId, null);
   assert.equal((await send({ method: 'GET', url: projectPath })).json<ProjectDetail>().specifications.length, 2);
   const specPath = `${projectPath}/specifications/${spec.id}`;
+  const requirementContent = (title: string, detail: string) => `# ${title}
+
+## 使用者任务
+项目管理员作为使用者，需要为每个项目登记可追溯的需求范围。用户输入项目标识和需求说明后，系统保存一份可回查的版本；${detail}。
+
+## 结果与失败边界
+成功后读取接口应返回当前版本号、完整正文与写入来源。输入不完整或版本已变化时，应给出明确错误，并保留先前版本；验收时分别检查首次写入、修订、重复提交和过期提交。
+
+来源：docs/project-requirements.md；本测试验证版本和冲突行为。`;
+  const firstContent = requirementContent('初版', '首版先覆盖项目登记和读取');
+  const secondContent = requirementContent('第二版', '修订版增加版本冲突提示');
 
   const first = await send({ method: 'POST', url: `${specPath}/revisions`, payload: {
-    content: '# 初版\n目标 A\n', changeSummary: '建立范围', expectedHeadRevisionId: null,
+    content: firstContent, changeSummary: '建立范围', expectedHeadRevisionId: null,
   } });
   assert.equal(first.statusCode, 201);
   const revision1 = first.json<SpecificationRevision>();
@@ -234,13 +248,13 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   assert.equal(revision1.changeSummary, '建立范围');
 
   const second = await send({ method: 'POST', url: `${specPath}/revisions`, payload: {
-    content: '# 第二版\n目标 B', changeSummary: '调整目标', expectedHeadRevisionId: revision1.id,
+    content: secondContent, changeSummary: '调整目标', expectedHeadRevisionId: revision1.id,
   } });
   assert.equal(second.statusCode, 201);
   const revision2 = second.json<SpecificationRevision>();
   assert.equal(revision2.revisionNo, 2);
   const unchanged = await send({ method: 'POST', url: `${specPath}/revisions`, payload: {
-    content: '# 第二版\r\n目标 B  ', changeSummary: '重复提交', expectedHeadRevisionId: revision2.id,
+    content: `${secondContent.replace(/\n/g, '\r\n')}  `, changeSummary: '重复提交', expectedHeadRevisionId: revision2.id,
   } });
   assert.equal(unchanged.statusCode, 409);
   assert.equal(unchanged.json().error.code, 'REVISION_UNCHANGED');
@@ -254,11 +268,11 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
   assert.deepEqual(history.map((item) => item.revisionNo), [2, 1]);
   assert.equal('content' in history[0]!, false);
   const old = (await send({ method: 'GET', url: `${specPath}/revisions/${revision1.id}` })).json<SpecificationRevision>();
-  assert.equal(old.content, '# 初版\n目标 A\n');
+  assert.equal(old.content, firstContent);
   assert.equal((await send({ method: 'GET', url: `${specPath}/revisions/missing` })).statusCode, 404);
   const detail = (await send({ method: 'GET', url: specPath })).json<SpecificationDetail>();
   assert.equal(detail.specification.latestRevisionId, revision2.id);
-  assert.equal(detail.latestRevision?.content, '# 第二版\n目标 B');
+  assert.equal(detail.latestRevision?.content, secondContent);
 
   assert.equal(featureSpec.featureId, departmentFeature.id);
   assert.equal((await send({ method: 'POST', url: `${projectPath}/specifications`, payload: {
@@ -304,6 +318,22 @@ test('Project and Specification revisions form a persistent, conflict-safe API f
     assert.ok(!JSON.stringify(planning).includes('ACCEPTANCE_PENDING'));
   } finally { readConnection.sqlite.close(); }
   assert.equal((await send({ method: 'GET', url: `${returnTaskPath}/authorizations` })).json<TaskAuthorization[]>()[0]?.status, 'REVOKED');
+  const reviewAuthorization = (await send({ method: 'POST', url: `${returnTaskPath}/authorizations` })).json<TaskAuthorization>();
+  const reviewRun = (await send({ method: 'POST', url: `${returnTaskPath}/runs`, payload: {
+    authorizationId: reviewAuthorization.id, actorName: 'manual-test', baseCommit: null,
+  } })).json<AiRun>();
+  assert.equal((await send({ method: 'POST', url: `${projectPath}/runs/${reviewRun.id}/submit`, payload: {
+    summary: '报告已通过，待本机复核', resultCommit: null, changedFiles: [],
+    verificationSummary: { status: 'PASS', summary: '报告测试通过' }, issues: [],
+  } })).statusCode, 200);
+  assert.equal((await send({ method: 'POST', url: `${projectPath}/runs/${reviewRun.id}/manual-review`, payload: {
+    decision: 'FAIL', summary: '复核发现测试报告不完整',
+    evidenceRefs: [{ kind: 'HTTPS_URL', url: 'https://example.com/checks/review-failed' }],
+  } })).statusCode, 200);
+  const manualRejectedConfirmation = await send({ method: 'POST', url: `${returnTaskPath}/confirm` });
+  assert.equal(manualRejectedConfirmation.statusCode, 409);
+  assert.equal(manualRejectedConfirmation.json<{ error: { code: string } }>().error.code, 'TASK_MANUAL_REVIEW_FAILED');
+  assert.equal((await send({ method: 'POST', url: `${returnTaskPath}/return` })).json<Task>().status, 'AUTHORIZED');
 });
 
 test('project creation defaults to AUTO without changing explicit CONTROLLED mode', async (t) => {

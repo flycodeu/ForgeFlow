@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import Database from 'better-sqlite3';
 import type {
-  CreatedAiToken, Feature, Module, Project, SpecificationRevision, SpecificationSummary, Task,
+  CreatedAiToken, Feature, Module, Project, ProjectLifecycle, SpecificationRevision, SpecificationSummary, Task,
 } from '@forgeflow/contracts';
 import { createApp } from '../../app.js';
 
@@ -65,13 +65,29 @@ test('MCP planning tools create deduplicated drafts without crossing human appro
   assert.deepEqual(initialContext.modules, []);
 
   const specInputs = [
-    ['BACKGROUND', '项目背景', '# 项目目标\n为个人设备建立可信台账。'],
-    ['RESEARCH', '调研与分析', '# 调研目标\n比较本地优先设备管理方案。\n\n# 对当前项目的影响\n采用离线存储，不复制参考项目架构。'],
-    ['REQUIREMENT', '需求分析', '# 项目目标\n统一管理个人设备。\n\n# 核心需求\n设备台账、设备分组、维修记录、统计分析。'],
-    ['ARCHITECTURE', '架构设计', '# 总体架构\n采用本地 Web 工作台与 SQLite 持久化。\n\n# 模块边界\n设备、维修、分析。'],
-    ['TECHNOLOGY', '技术栈', '# Frontend\nVue 3 + TypeScript\n\n# Backend\nNode.js + Fastify\n\n# Database\nSQLite'],
+    ['BACKGROUND', '项目背景', `# 项目缘起
+设备登记目前分散在纸本和个人表格中，使用者无法追溯维修前后的状态，交接人员也难以判断同一设备是否反复故障。这让维修决策依赖口头记忆，缺少可核对的记录。
+
+项目计划先建立个人设备台账，再串联维修记录与状态回查，最后根据真实使用反馈决定是否增加统计分析。当前只有登记原型；跨记录查询和统计仍是目标，需要用实际交接案例验证。依据：docs/interviews/device-handover-2026-09-20.md。`],
+    ['RESEARCH', '调研与分析', `# 方案比较
+比较纯本地台账和云端同步两种方案：本地方案便于离线使用并减少账号依赖，但多设备协作困难；云端方案共享更方便，却需要处理网络中断、权限和数据恢复。当前项目先采用本地方案，避免在个人设备场景中提前引入服务端运维。
+
+后续需要用两台设备的真实交接流程验证是否确有同步需求，再决定是否引入云端。依据：docs/research/device-ledger-options.md 与负责人访谈记录（2026-09-20）。`],
+    ['REQUIREMENT', '需求分析', `# 使用者任务
+设备使用者输入设备编号、名称和购入日期后保存台账，应能按编号查询并看到最近一次维修结果；交接人员选择设备后，应能查看状态变化和记录来源。
+
+重复编号必须拒绝且不覆盖旧记录；离线保存失败要提示原因并保留正在填写的内容。首期验收需核对新增、重复输入、维修后查询与异常恢复四条路径，统计分析暂列待验证需求。依据：docs/interviews/device-handover-2026-09-20.md。`],
+    ['ARCHITECTURE', '架构设计', `# 当前与目标调用链
+当前 Web 界面将设备登记请求发送到本地服务，由服务校验编号并写入 SQLite；查询请求沿相同边界读取台账并返回页面。界面不直接操作数据库，服务负责重复编号与写入失败的处理。
+
+下一步计划加入维修记录模块，通过设备 ID 关联台账；统计分析只读取已核对的数据，尚未接通。网络中断不应影响当前本地登记，数据库写入失败要回滚并向页面返回明确错误。依据：docs/architecture/device-ledger.md。`],
+    ['TECHNOLOGY', '技术栈', `# 技术与取舍
+当前界面使用 Vue 3 与 TypeScript，负责表单校验和状态展示；本地服务使用 Node.js 与 Fastify，集中处理输入约束和查询；SQLite 用于单机持久化，便于离线使用和数据备份。
+
+云端数据库是候选方案，但需要账号、同步冲突及运维机制，首期不引入。后续若真实交接需要多设备协作，应先验证同步冲突与恢复成本，再决定迁移条件。依据：docs/architecture/device-ledger.md。`],
   ] as const;
   const specifications: SpecificationSummary[] = [];
+  const revisionIds: string[] = [];
   for (const [type, title, content] of specInputs) {
     const specification = success<SpecificationSummary>(await call(planner.token, 'create_project_spec', {
       projectId: project.id, type, title,
@@ -82,7 +98,18 @@ test('MCP planning tools create deduplicated drafts without crossing human appro
     }));
     assert.equal(revision.revisionNo, 1);
     assert.match(revision.source, /^ai-token:/);
+    revisionIds.push(revision.id);
   }
+  assert.equal(businessError(await call(planner.token, 'create_spec_revision', {
+    specId: specifications[0]!.id, expectedHeadRevisionId: revisionIds[0],
+    changeSummary: '把项目背景误写为功能状态', content: '# 项目背景\n账号、菜单、审计功能已经完成。',
+  })).code, 'DOCUMENT_RULE_VIOLATION');
+  const afterRejected = success<{ projectSpecifications: Array<{ type: string; specification: { latestRevision: { id: string } | null } }> }>(
+    await call(planner.token, 'get_project_planning_context', { projectId: project.id }),
+  );
+  assert.equal(afterRejected.projectSpecifications.find((item) => item.type === 'background')?.specification.latestRevision?.id, revisionIds[0]);
+  const lifecycle = await rest<ProjectLifecycle>('GET', `/api/projects/${project.id}/lifecycle`, undefined, planner.token);
+  assert.equal(lifecycle.stages.find((stage) => stage.key === 'discovery')?.status, 'FORMED');
   assert.equal(businessError(await call(planner.token, 'create_project_spec', {
     projectId: project.id, type: 'REQUIREMENT', title: '重复需求',
   })).code, 'PROJECT_SPEC_EXISTS');
