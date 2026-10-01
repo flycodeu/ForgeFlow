@@ -5,10 +5,20 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $log = Join-Path $env:LOCALAPPDATA 'ForgeFlow\update.log'
+function Get-LocalDrivePath([string]$Value) {
+  $path = $Value
+  # Rust canonicalize returns \\?\C:\... on Windows. NSIS and the TEMP guard
+  # use ordinary drive paths, so compare and launch with the same representation.
+  if ($path.StartsWith('\\?\', [StringComparison]::OrdinalIgnoreCase)) {
+    $path = $path.Substring(4)
+  }
+  if ($path -notmatch '^[A-Za-z]:\\') { throw 'Invalid local update path.' }
+  return [IO.Path]::GetFullPath($path)
+}
 try {
-  $folder = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\')
-  $file = [IO.Path]::GetFullPath($Installer)
-  $allowed = [IO.Path]::GetFullPath((Join-Path $env:TEMP 'ForgeFlow-updates')).TrimEnd('\') + '\'
+  $folder = (Get-LocalDrivePath $InstallDir).TrimEnd('\')
+  $file = Get-LocalDrivePath $Installer
+  $allowed = (Get-LocalDrivePath (Join-Path $env:TEMP 'ForgeFlow-updates')).TrimEnd('\') + '\'
   if (-not $file.StartsWith($allowed, [StringComparison]::OrdinalIgnoreCase) -or
       [IO.Path]::GetFileName($file) -notmatch '^ForgeFlow-Setup-\d+\.\d+\.\d+\.exe$' -or
       -not (Test-Path -LiteralPath (Join-Path $folder 'Uninstall.exe'))) { throw 'Invalid update paths.' }
