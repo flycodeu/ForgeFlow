@@ -8,6 +8,9 @@ export type ProjectMapNode = {
   status: ProjectMapStatus;
   technology?: string[];
   source?: string;
+  details?: string[];
+  featureCodes?: string[];
+  placement?: 'main' | 'crosscut' | 'environment';
 };
 
 export type ProjectMapEdge = {
@@ -17,7 +20,15 @@ export type ProjectMapEdge = {
   status?: ProjectMapStatus;
 };
 
-export type ProjectMap = { version: 1; nodes: ProjectMapNode[]; edges: ProjectMapEdge[] };
+export type ProjectMapFlowStep = { label: string; nodeId?: string; description?: string };
+export type ProjectMapFlow = {
+  id: string;
+  label: string;
+  status: ProjectMapStatus;
+  steps: ProjectMapFlowStep[];
+};
+
+export type ProjectMap = { version: 1; nodes: ProjectMapNode[]; edges: ProjectMapEdge[]; flows?: ProjectMapFlow[] };
 export type ProjectMapParseResult =
   | { state: 'missing' }
   | { state: 'invalid'; reason: string }
@@ -25,8 +36,9 @@ export type ProjectMapParseResult =
 
 /** Use declared, connected code paths as the main reading axis. Planned edges keep their own arrows. */
 export function orderProjectMapLayers(map: ProjectMap): string[] {
-  const layers = [...new Set(map.nodes.map((node) => node.layer))];
-  const layerById = new Map(map.nodes.map((node) => [node.id, node.layer]));
+  const mainNodes = map.nodes.filter((node) => (node.placement ?? 'main') === 'main');
+  const layers = [...new Set(mainNodes.map((node) => node.layer))];
+  const layerById = new Map(mainNodes.map((node) => [node.id, node.layer]));
   const after = new Map(layers.map((layer) => [layer, new Set<string>()]));
   const indegree = new Map(layers.map((layer) => [layer, 0]));
   for (const edge of map.edges) {
@@ -62,6 +74,8 @@ const bounded = (value: unknown, max: number): value is string =>
 const onlyKeys = (value: Record<string, unknown>, allowed: string[]) =>
   Object.keys(value).every((key) => allowed.includes(key));
 const status = (value: unknown): value is ProjectMapStatus => value === 'implemented' || value === 'planned';
+const placement = (value: unknown): value is NonNullable<ProjectMapNode['placement']> =>
+  value === 'main' || value === 'crosscut' || value === 'environment';
 
 /** Parse only a declared, versioned architecture map. Never infer connections from prose or names. */
 export function parseProjectMap(markdown: string | null | undefined): ProjectMapParseResult {
@@ -77,7 +91,7 @@ export function parseProjectMap(markdown: string | null | undefined): ProjectMap
   let value: unknown;
   try { value = JSON.parse(json); }
   catch { return { state: 'invalid', reason: 'forgeflow-map 不是有效的 JSON。' }; }
-  if (!record(value) || !onlyKeys(value, ['version', 'nodes', 'edges']) || value.version !== 1) {
+  if (!record(value) || !onlyKeys(value, ['version', 'nodes', 'edges', 'flows']) || value.version !== 1) {
     return { state: 'invalid', reason: '图谱需要 version: 1、nodes 和 edges。' };
   }
   if (!Array.isArray(value.nodes) || !Array.isArray(value.edges)
@@ -88,13 +102,18 @@ export function parseProjectMap(markdown: string | null | undefined): ProjectMap
   const ids = new Set<string>();
   const nodes: ProjectMapNode[] = [];
   for (const [index, item] of value.nodes.entries()) {
-    if (!record(item) || !onlyKeys(item, ['id', 'label', 'layer', 'summary', 'status', 'technology', 'source'])
+    if (!record(item) || !onlyKeys(item, ['id', 'label', 'layer', 'summary', 'status', 'technology', 'source', 'details', 'featureCodes', 'placement'])
       || !bounded(item.id, 64) || !idPattern.test(item.id) || ids.has(item.id)
       || !bounded(item.label, 80) || !bounded(item.layer, 60) || !bounded(item.summary, 500)
       || !status(item.status)
+      || (item.placement !== undefined && !placement(item.placement))
       || (item.source !== undefined && !bounded(item.source, 300))
       || (item.technology !== undefined && (!Array.isArray(item.technology) || item.technology.length > 16
-        || !item.technology.every((entry: unknown) => bounded(entry, 80))))) {
+        || !item.technology.every((entry: unknown) => bounded(entry, 80))))
+      || (item.details !== undefined && (!Array.isArray(item.details) || item.details.length > 12
+        || !item.details.every((entry: unknown) => bounded(entry, 100))))
+      || (item.featureCodes !== undefined && (!Array.isArray(item.featureCodes) || item.featureCodes.length > 40
+        || !item.featureCodes.every((entry: unknown) => bounded(entry, 80))))) {
       return { state: 'invalid', reason: `第 ${index + 1} 个节点字段无效或 ID 重复。` };
     }
     ids.add(item.id);
@@ -111,5 +130,24 @@ export function parseProjectMap(markdown: string | null | undefined): ProjectMap
     }
     edges.push(item as ProjectMapEdge);
   }
-  return { state: 'ready', map: { version: 1, nodes, edges } };
+  if (value.flows !== undefined && (!Array.isArray(value.flows) || value.flows.length > 12)) {
+    return { state: 'invalid', reason: '业务流程最多 12 条。' };
+  }
+  const flowIds = new Set<string>();
+  const flows: ProjectMapFlow[] = [];
+  for (const [index, item] of (value.flows ?? []).entries()) {
+    if (!record(item) || !onlyKeys(item, ['id', 'label', 'status', 'steps'])
+      || !bounded(item.id, 64) || !idPattern.test(item.id) || flowIds.has(item.id)
+      || !bounded(item.label, 80) || !status(item.status)
+      || !Array.isArray(item.steps) || item.steps.length < 2 || item.steps.length > 12
+      || !item.steps.every((step: unknown) => record(step) && onlyKeys(step, ['label', 'nodeId', 'description'])
+        && bounded(step.label, 80)
+        && (step.nodeId === undefined || (bounded(step.nodeId, 64) && ids.has(step.nodeId)))
+        && (step.description === undefined || bounded(step.description, 200)))) {
+      return { state: 'invalid', reason: `第 ${index + 1} 条业务流程字段无效、ID 重复或步骤引用不存在的节点。` };
+    }
+    flowIds.add(item.id);
+    flows.push(item as ProjectMapFlow);
+  }
+  return { state: 'ready', map: { version: 1, nodes, edges, ...(value.flows === undefined ? {} : { flows }) } };
 }

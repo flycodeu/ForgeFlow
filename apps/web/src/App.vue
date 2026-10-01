@@ -36,6 +36,7 @@ const projectCardMeta = ref<Record<string, { updatedAt: string; modules?: number
 const projectDetail = ref<ProjectDetail | null>(null);
 const architectureMapMarkdown = ref<string | null>(null);
 const architectureMapRevision = ref<string | null>(null);
+const architectureMapProjectId = ref<string | null>(null);
 const architectureMapLoading = ref(false);
 const architectureMapError = ref('');
 const specificationDetail = ref<SpecificationDetail | null>(null);
@@ -48,6 +49,18 @@ const selectedFeature = ref<Feature | null>(null);
 const selectedCapabilityId = ref<string | null>(null);
 const collapsedModules = ref(new Set<string>());
 const collapsedFeatures = ref(new Set<string>());
+watch(projectDetail, (detail, previousDetail) => {
+  if (!detail) return;
+  const sameProject = previousDetail?.project.id === detail.project.id;
+  const knownModuleIds = new Set(sameProject ? previousDetail.modules.map(module => module.id) : []);
+  const knownFeatureIds = new Set(sameProject ? previousDetail.features.map(feature => feature.id) : []);
+  collapsedModules.value = new Set(detail.modules
+    .filter(module => !knownModuleIds.has(module.id) || collapsedModules.value.has(module.id))
+    .map(module => module.id));
+  collapsedFeatures.value = new Set(detail.features
+    .filter(feature => !knownFeatureIds.has(feature.id) || collapsedFeatures.value.has(feature.id))
+    .map(feature => feature.id));
+});
 const featureSearch = ref('');
 const featureSearchInput = ref('');
 const featureModuleFilter = ref('');
@@ -611,7 +624,11 @@ async function loadWorkspace() {
 }
 async function refreshCurrentProject() {
   const id = selectedProjectId.value; if (!id) return;
-  projectDetail.value = await api<ProjectDetail>(`/api/projects/${id}`); projectActivity.value = await collectActivity(projectDetail.value);
+  const detail = await api<ProjectDetail>(`/api/projects/${id}`);
+  if (selectedProjectId.value !== id) return;
+  const activity = await collectActivity(detail);
+  if (selectedProjectId.value !== id) return;
+  projectDetail.value = detail; projectActivity.value = activity;
   if (selectedFeature.value) selectedFeature.value = projectDetail.value.features.find((item) => item.id === selectedFeature.value?.id) ?? null;
   if (selectedRun.value) selectedRun.value = projectDetail.value.runs.find((item) => item.id === selectedRun.value?.id) ?? null;
   const dates = [projectDetail.value.project.createdAt, ...projectDetail.value.modules.map((item) => item.updatedAt), ...projectDetail.value.features.map((item) => item.updatedAt), ...projectDetail.value.tasks.map((item) => item.updatedAt), ...projectDetail.value.runs.map((item) => item.updatedAt), ...projectDetail.value.specifications.map((item) => item.createdAt), ...projectActivity.value.map((item) => item.createdAt)];
@@ -624,14 +641,18 @@ async function loadArchitectureMap() {
   const loadId = ++architectureMapLoadId;
   const projectId = selectedProjectId.value;
   const spec = projectDetail.value?.specifications.find((item) => item.featureId === null && item.kind === 'architecture');
-  architectureMapMarkdown.value = null; architectureMapRevision.value = null; architectureMapError.value = '';
-  if (!projectId || !spec) return;
+  architectureMapError.value = '';
+  if (architectureMapProjectId.value !== projectId || !spec) {
+    architectureMapMarkdown.value = null; architectureMapRevision.value = null;
+  }
+  if (!projectId || !spec) { architectureMapProjectId.value = projectId; architectureMapLoading.value = false; return; }
   architectureMapLoading.value = true;
   try {
     const detail = await api<SpecificationDetail>(`/api/projects/${projectId}/specifications/${spec.id}`);
     if (selectedProjectId.value !== projectId || loadId !== architectureMapLoadId) return;
     architectureMapMarkdown.value = detail.latestRevision?.content ?? null;
     architectureMapRevision.value = detail.latestRevision ? `REV ${detail.latestRevision.revisionNo}` : null;
+    architectureMapProjectId.value = projectId;
   } catch (cause) {
     if (selectedProjectId.value === projectId && loadId === architectureMapLoadId) architectureMapError.value = cause instanceof Error ? cause.message : '读取架构资料失败';
   } finally { if (loadId === architectureMapLoadId) architectureMapLoading.value = false; }
@@ -666,6 +687,7 @@ async function selectProject(id: string) {
   if (archiveView.value && !archiveView.value.canLeave()) return;
   clearMessage(); busy.value = true; selectedProjectId.value = id; selectedSpecId.value = null; archiveDocumentId.value = null;
   architectureMapLoadId++;
+  architectureMapProjectId.value = null;
   architectureMapMarkdown.value = null; architectureMapRevision.value = null; architectureMapError.value = ''; architectureMapLoading.value = false;
   specificationDetail.value = null; selectedRevision.value = null; revisions.value = []; projectActivity.value = [];
   try { await refreshCurrentProject(); featureSearch.value = ''; featureSearchInput.value = ''; featureModuleFilter.value = ''; expandedBoardColumns.value = new Set(); workspacePage.value = 'features'; mobileNavOpen.value = false; }
@@ -1442,9 +1464,9 @@ onUnmounted(() => {
 
           <template v-if="workspacePage === 'map'">
             <div class="map-page-actions"><button class="secondary-button" type="button" @click="navigate('architecture')">查看架构资料</button></div>
-            <p v-if="architectureMapLoading" class="map-read-state" role="status">正在读取架构版本…</p>
+            <p v-if="architectureMapLoading && architectureMapProjectId !== selectedProjectId" class="map-read-state" role="status">正在读取架构版本…</p>
             <p v-else-if="architectureMapError" class="map-read-state error" role="alert">{{ architectureMapError }}</p>
-            <ProjectMap v-if="!architectureMapLoading" :detail="projectDetail" :architecture-markdown="architectureMapMarkdown" :architecture-revision="architectureMapRevision" @open-feature="openFeature" />
+            <ProjectMap v-if="!architectureMapLoading || architectureMapProjectId === selectedProjectId" :detail="projectDetail" :architecture-markdown="architectureMapMarkdown" :architecture-revision="architectureMapRevision" @open-feature="openFeature" />
           </template>
 
           <ProjectMaterials v-if="workspacePage === 'materials'" :key="refreshEpoch" :project-id="currentProject.id" :specifications="projectDetail.specifications"
