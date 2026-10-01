@@ -878,11 +878,12 @@ code, pre { font-family: var(--mono); }
   .document-statusbar small { width: 100%; overflow-wrap: anywhere; }
   .status-tag { white-space: nowrap; }
   .markdown-body { padding: 24px 18px 36px; }
-  .markdown-body table { min-width: 620px; }
 }
 
 .markdown-body {
   padding: 36px 44px 56px;
+  max-width: 980px;
+  margin-inline: auto;
   color: var(--ink-secondary);
   font-size: 15px;
   line-height: 1.75;
@@ -892,9 +893,12 @@ code, pre { font-family: var(--mono); }
 .markdown-body h1 { font-size: 26px; font-weight: 700; color: var(--ink); margin: 0 0 20px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .markdown-body h2 { font-size: 20px; font-weight: 600; color: var(--ink); margin: 32px 0 14px; }
 .markdown-body h3 { font-size: 16px; font-weight: 600; color: var(--ink); margin: 24px 0 10px; }
+.markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 14px; font-weight: 600; color: var(--ink); margin: 20px 0 8px; }
 .markdown-body p { margin: 0 0 14px; }
 .markdown-body ul, .markdown-body ol { margin: 0 0 16px; padding-left: 24px; }
 .markdown-body li { margin-bottom: 4px; }
+.markdown-body a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.markdown-body img { display: block; max-width: 100%; height: auto; margin: 16px 0; }
 .markdown-body blockquote {
   margin: 16px 0;
   padding: 10px 18px;
@@ -925,28 +929,42 @@ code, pre { font-family: var(--mono); }
 
 .markdown-table-wrap {
   margin: 20px 0;
+  max-width: 100%;
   overflow-x: auto;
+  overscroll-behavior-inline: contain;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
 }
+.markdown-table-wrap:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .markdown-body table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 13.5px;
 }
 .markdown-body th {
   padding: 10px 14px;
+  min-width: 120px;
+  max-width: 360px;
   background: var(--surface-subtle);
   border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line-subtle);
   font-weight: 600;
   color: var(--ink);
   text-align: left;
+  vertical-align: top;
 }
 .markdown-body td {
   padding: 10px 14px;
+  min-width: 120px;
+  max-width: 360px;
   border-bottom: 1px solid var(--line-subtle);
+  border-right: 1px solid var(--line-subtle);
   color: var(--ink-secondary);
+  vertical-align: top;
 }
+.markdown-body th:last-child, .markdown-body td:last-child { border-right: 0; }
+.markdown-body tbody tr:nth-child(even) { background: var(--surface-subtle); }
 .markdown-body tr:last-child td { border-bottom: 0; }
 
 .version-rail { min-width: 0; background: var(--surface); }

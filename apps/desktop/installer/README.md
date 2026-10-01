@@ -6,7 +6,7 @@
 node scripts/installer-build.mjs
 ```
 
-输出 `apps/desktop/dist/ForgeFlow-Setup-0.2.2.exe`。安装向导可选择空的本地目录，默认当前用户的 `LocalAppData\Programs\ForgeFlow`，不需要管理员权限。程序目录与项目数据目录分开；数据目录由应用首次启动/设置页管理，选择保存在 `%LOCALAPPDATA%\ForgeFlow\storage.json`。卸载不删除这份配置或数据目录。
+输出 `apps/desktop/dist/ForgeFlow-Setup-0.2.3.exe`。安装向导可选择空的本地目录，默认当前用户的 `LocalAppData\Programs\ForgeFlow`，不需要管理员权限。程序目录与项目数据目录分开；数据目录由应用首次启动/设置页管理，选择保存在 `%LOCALAPPDATA%\ForgeFlow\storage.json`。卸载不删除这份配置或数据目录。
 
 0.2.0 起，安装版可从系统设置内检查 GitHub Release，签名校验更新清单、按 SHA256 校验安装包，显示下载进度后自动退出、静默安装并重启。0.1.x 首次升级仍需手动运行新版安装包。手动升级时先从托盘执行“停止后台并退出”。安装器识别已有 ForgeFlow 目录并允许就地覆盖；若仍有残留进程，保护脚本会尝试强制结束。其他非空目录会被拒绝。更新清单签名不等于 Windows Authenticode 代码签名；安装包尚未做 Authenticode 签名。机器需已有 Microsoft Edge WebView2 Runtime。
 

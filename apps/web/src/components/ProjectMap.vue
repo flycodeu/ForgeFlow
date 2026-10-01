@@ -1,214 +1,253 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
-import type { Capability, Feature, ProjectDetail } from '@forgeflow/contracts';
-import { parseProjectMap, type ProjectMapNode, type ProjectMapStatus } from './project-map';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import type { ProjectDetail } from '@forgeflow/contracts';
+import {
+  orderProjectMapLayers,
+  parseProjectMap,
+  type ProjectMapEdge,
+  type ProjectMapNode,
+  type ProjectMapStatus,
+} from './project-map';
 
-/** Pass the current architecture SpecificationRevision.content, not rendered HTML. */
+/** The map is declared in the current architecture revision; registered features are not inferred as nodes. */
 const props = defineProps<{
   detail: ProjectDetail;
   architectureMarkdown?: string | null;
   architectureRevision?: string | null;
 }>();
-const emit = defineEmits<{ openFeature: [feature: Feature, capabilityId?: string] }>();
 
-const view = ref<'structure' | 'architecture'>('architecture');
 const query = ref('');
-const selectedModuleId = ref('');
-const selectedFeatureId = ref('');
 const selectedNodeId = ref('');
-
-const featureStatus: Record<Feature['status'], string> = {
-  DRAFT: '草稿', DESIGNING: '设计中', READY: '待实施', IMPLEMENTING: '实施中',
-  VERIFYING: '验证中', ACCEPTANCE_PENDING: '待验收', ACCEPTED: '已标记验收', DELIVERED: '交付标记（待核对）',
-};
-const capabilityStatus: Record<Capability['status'], string> = {
-  DRAFT: '草稿', DESIGNED: '已设计', IMPLEMENTING: '实现中',
-  TESTING: '验证中', DONE: '标记完成', BLOCKED: '受阻',
-};
-const mapStatus: Record<ProjectMapStatus, string> = {
-  implemented: '已实现 · 文档标注', planned: '规划中 · 文档标注',
-};
-const matches = (text: string) => text.toLocaleLowerCase().includes(query.value.trim().toLocaleLowerCase());
-const sortedModules = computed(() => [...props.detail.modules].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'zh-CN')));
-const featuresOf = (moduleId: string) => props.detail.features
-  .filter((feature) => feature.moduleId === moduleId)
-  .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'zh-CN'));
-const capabilitiesOf = (featureId: string) => props.detail.capabilities
-  .filter((capability) => capability.featureId === featureId)
-  .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'zh-CN'));
-const matchingModules = computed(() => sortedModules.value.filter((module) =>
-  !query.value.trim() || matches(module.code) || matches(module.name) || matches(module.description)
-    || featuresOf(module.id).some((feature) => matches(feature.code) || matches(feature.name) || matches(feature.summary)
-      || capabilitiesOf(feature.id).some((capability) => matches(capability.code) || matches(capability.name) || matches(capability.summary))),
-));
-const selectedModule = computed(() => matchingModules.value.find((module) => module.id === selectedModuleId.value) ?? matchingModules.value[0] ?? null);
-const matchingFeatures = computed(() => selectedModule.value ? featuresOf(selectedModule.value.id).filter((feature) =>
-  !query.value.trim() || matches(selectedModule.value!.name) || matches(feature.code) || matches(feature.name) || matches(feature.summary)
-    || capabilitiesOf(feature.id).some((capability) => matches(capability.code) || matches(capability.name) || matches(capability.summary)),
-) : []);
-const selectedFeature = computed(() => matchingFeatures.value.find((feature) => feature.id === selectedFeatureId.value) ?? matchingFeatures.value[0] ?? null);
-const matchingCapabilities = computed(() => selectedFeature.value ? capabilitiesOf(selectedFeature.value.id).filter((capability) =>
-  !query.value.trim() || matches(selectedModule.value?.name ?? '') || matches(selectedFeature.value!.name)
-    || matches(capability.code) || matches(capability.name) || matches(capability.summary),
-) : []);
+const page = ref<HTMLElement | null>(null);
+const diagram = ref<HTMLElement | null>(null);
+const inspector = ref<HTMLElement | null>(null);
+const diagramSize = ref({ width: 0, height: 0 });
+type DrawnEdge = { key: string; d: string; from: string; to: string; status: ProjectMapStatus | 'unknown' };
+const drawnEdges = ref<DrawnEdge[]>([]);
+let resizeObserver: ResizeObserver | null = null;
+let pendingFrame = 0;
 
 const parsedMap = computed(() => parseProjectMap(props.architectureMarkdown));
 const map = computed(() => parsedMap.value.state === 'ready' ? parsedMap.value.map : null);
-const layers = computed(() => [...new Set(map.value?.nodes.map((node) => node.layer) ?? [])].map((name) => ({
-  name, nodes: map.value?.nodes.filter((node) => node.layer === name).filter((node) =>
-    !query.value.trim() || matches(node.label) || matches(node.summary) || matches(node.layer)
-      || node.technology?.some(matches) || matches(node.source ?? ''),
-  ) ?? [],
-})).filter((layer) => layer.nodes.length));
 const nodesById = computed(() => new Map(map.value?.nodes.map((node) => [node.id, node]) ?? []));
+const searchTerm = computed(() => query.value.trim().toLocaleLowerCase());
+const matches = (value: string | undefined) => value?.toLocaleLowerCase().includes(searchTerm.value) ?? false;
+const layers = computed(() => {
+  if (!map.value) return [];
+  return orderProjectMapLayers(map.value).map((name) => ({
+    name,
+    nodes: map.value!.nodes.filter((node) => node.layer === name && (
+      !searchTerm.value || matches(name) || matches(node.label) || matches(node.summary)
+      || matches(node.source) || node.technology?.some(matches)
+    )),
+  })).filter((layer) => layer.nodes.length > 0);
+});
+const visibleIds = computed(() => new Set(layers.value.flatMap((layer) => layer.nodes.map((node) => node.id))));
+const visibleEdges = computed(() => map.value?.edges.filter((edge) =>
+  visibleIds.value.has(edge.from) && visibleIds.value.has(edge.to)) ?? []);
 const selectedNode = computed<ProjectMapNode | null>(() =>
-  layers.value.flatMap((layer) => layer.nodes).find((node) => node.id === selectedNodeId.value)
-    ?? layers.value[0]?.nodes[0] ?? null);
-const outgoing = (id: string) => map.value?.edges.filter((edge) => edge.from === id) ?? [];
-const incoming = computed(() => map.value?.edges.filter((edge) => edge.to === selectedNode.value?.id) ?? []);
+  visibleIds.value.has(selectedNodeId.value) ? nodesById.value.get(selectedNodeId.value) ?? null : null);
+const selectedIncoming = computed(() => map.value?.edges.filter((edge) => edge.to === selectedNode.value?.id) ?? []);
+const selectedOutgoing = computed(() => map.value?.edges.filter((edge) => edge.from === selectedNode.value?.id) ?? []);
+const relatedIds = computed(() => new Set([
+  ...selectedIncoming.value.map((edge) => edge.from),
+  ...selectedOutgoing.value.map((edge) => edge.to),
+]));
 const nodeName = (id: string) => nodesById.value.get(id)?.label ?? id;
+const statusText: Record<ProjectMapStatus, string> = { implemented: '文档标注已有代码', planned: '文档标注规划中' };
+const cardStatusText: Record<ProjectMapStatus, string> = { implemented: '已有代码', planned: '规划中' };
+const edgeStatusText = (edge: ProjectMapEdge) =>
+  edge.status === 'implemented' ? '文档标注已连接' : edge.status === 'planned' ? '规划连线' : '未标注状态';
+const palette = [
+  { accent: '#5168cc', tint: '#f1f3ff', border: '#cfd6fa' },
+  { accent: '#15846e', tint: '#eefaf5', border: '#bfe9d6' },
+  { accent: '#3979b8', tint: '#eef6fd', border: '#c8e0f7' },
+  { accent: '#ae6a28', tint: '#fff8ee', border: '#f2dac0' },
+  { accent: '#765aab', tint: '#f6f2fc', border: '#ded0f4' },
+  { accent: '#66798a', tint: '#f2f6f9', border: '#d7e1e8' },
+];
+const layerStyle = (index: number) => ({
+  '--band-accent': palette[index % palette.length]!.accent,
+  '--band-tint': palette[index % palette.length]!.tint,
+  '--band-border': palette[index % palette.length]!.border,
+});
 
 function selectNode(id: string) {
-  query.value = '';
+  selectedNodeId.value = selectedNodeId.value === id ? '' : id;
+  if (selectedNodeId.value && (page.value?.getBoundingClientRect().width ?? 9999) <= 870) {
+    nextTick(() => inspector.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }
+}
+
+function navigateToNode(id: string) {
+  if (!visibleIds.value.has(id)) query.value = '';
   selectedNodeId.value = id;
 }
-function changeView(next: 'structure' | 'architecture') {
-  view.value = next;
-  query.value = '';
+
+function scheduleMeasure() {
+  if (pendingFrame) cancelAnimationFrame(pendingFrame);
+  pendingFrame = requestAnimationFrame(() => {
+    pendingFrame = 0;
+    measureEdges();
+  });
 }
-watch(() => props.detail.project.id, () => {
-  query.value = '';
-  selectedModuleId.value = '';
-  selectedFeatureId.value = '';
-  selectedNodeId.value = '';
+
+function measureEdges() {
+  const root = diagram.value;
+  if (!root || !map.value) {
+    drawnEdges.value = [];
+    return;
+  }
+  const rootBounds = root.getBoundingClientRect();
+  diagramSize.value = { width: rootBounds.width, height: rootBounds.height };
+  const bounds = new Map<string, DOMRect>();
+  for (const element of Array.from(root.querySelectorAll<HTMLElement>('[data-map-node]'))) {
+    const id = element.dataset.mapNode;
+    if (id) bounds.set(id, element.getBoundingClientRect());
+  }
+  drawnEdges.value = visibleEdges.value.flatMap((edge, index) => {
+    const from = bounds.get(edge.from);
+    const to = bounds.get(edge.to);
+    if (!from || !to) return [];
+    const fromCenterX = from.left + from.width / 2 - rootBounds.left;
+    const toCenterX = to.left + to.width / 2 - rootBounds.left;
+    const fromCenterY = from.top + from.height / 2 - rootBounds.top;
+    const toCenterY = to.top + to.height / 2 - rootBounds.top;
+    let x1: number, y1: number, x2: number, y2: number, d: string;
+    if (Math.abs(toCenterY - fromCenterY) > Math.max(from.height, to.height) * .58) {
+      const down = toCenterY > fromCenterY;
+      x1 = fromCenterX;
+      y1 = (down ? from.bottom : from.top) - rootBounds.top;
+      x2 = toCenterX;
+      y2 = (down ? to.top : to.bottom) - rootBounds.top;
+      const bend = Math.max(25, Math.abs(y2 - y1) * .42) * (down ? 1 : -1);
+      d = 'M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + (y1 + bend) + ', ' + x2 + ' ' + (y2 - bend) + ', ' + x2 + ' ' + y2;
+    } else {
+      const right = toCenterX > fromCenterX;
+      x1 = (right ? from.right : from.left) - rootBounds.left;
+      y1 = fromCenterY;
+      x2 = (right ? to.left : to.right) - rootBounds.left;
+      y2 = toCenterY;
+      const bend = Math.max(24, Math.abs(x2 - x1) * .46) * (right ? 1 : -1);
+      d = 'M ' + x1 + ' ' + y1 + ' C ' + (x1 + bend) + ' ' + y1 + ', ' + (x2 - bend) + ' ' + y2 + ', ' + x2 + ' ' + y2;
+    }
+    return [{ key: edge.from + '-' + edge.to + '-' + index, d, from: edge.from, to: edge.to, status: edge.status ?? 'unknown' }];
+  });
+}
+
+watch(() => props.detail.project.id, () => { query.value = ''; selectedNodeId.value = ''; });
+watch([layers, visibleEdges], async () => { await nextTick(); scheduleMeasure(); }, { flush: 'post' });
+onMounted(() => {
+  resizeObserver = new ResizeObserver(scheduleMeasure);
+  if (diagram.value) resizeObserver.observe(diagram.value);
+  window.addEventListener('resize', scheduleMeasure);
+  scheduleMeasure();
+});
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
+  window.removeEventListener('resize', scheduleMeasure);
+  if (pendingFrame) cancelAnimationFrame(pendingFrame);
 });
 </script>
 
 <template>
-  <div class="project-map-page">
+  <div ref="page" class="project-map-page">
     <header class="map-heading">
-      <div>
-        <span class="map-eyebrow">PROJECT ATLAS</span>
-        <h1>项目全景图</h1>
-        <p>先看最新架构修订中的模块交互，再对照项目的功能登记树。</p>
-      </div>
-      <div class="map-counts" aria-label="项目结构数量">
-        <span><strong>{{ detail.modules.length }}</strong> 登记模块</span>
-        <span><strong>{{ detail.features.length }}</strong> 登记功能</span>
-        <span><strong>{{ detail.capabilities.length }}</strong> 登记操作</span>
-      </div>
-    </header>
-
-    <div class="map-toolbar">
-      <div class="map-tabs" role="group" aria-label="全景图视图">
-        <button type="button" :aria-pressed="view === 'structure'" @click="changeView('structure')">登记功能树</button>
-        <button type="button" :aria-pressed="view === 'architecture'" @click="changeView('architecture')">交互与拓扑</button>
+      <div class="heading-copy">
+        <span class="map-eyebrow">ARCHITECTURE / MODULES</span>
+        <h1>项目模块图</h1>
+        <p>按架构修订中的模块和真实声明的交互方向排列。</p>
       </div>
       <label class="map-search">
-        <span class="sr-only">搜索{{ view === 'structure' ? '模块、功能或操作' : '架构节点或技术' }}</span>
         <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.8" cy="8.8" r="5.7" stroke="currentColor" stroke-width="1.5"/><path d="m13.3 13.3 4.3 4.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        <input v-model="query" type="search" :placeholder="view === 'structure' ? '查找模块、功能或操作' : '查找节点、技术或来源'" />
+        <span class="sr-only">搜索模块、职责或技术</span>
+        <input v-model="query" type="search" placeholder="搜索模块、职责或技术" />
       </label>
+    </header>
+
+    <div v-if="parsedMap.state === 'missing'" class="map-empty">
+      <strong>架构修订中还没有模块图</strong>
+      <p>在架构设计正文加入一个 <code>forgeflow-map</code> JSON 代码块，明确层级、模块和连线后，这里才会绘制关系。</p>
     </div>
-
-    <template v-if="view === 'structure'">
-      <p class="map-note">这棵树保留项目的功能登记，可能包含早期或尚未迁移的规划项。现行方案请对照最新架构和项目资料；登记状态不等同于代码验证或负责人验收。</p>
-      <div v-if="!detail.modules.length" class="map-empty">尚未记录模块。创建模块和功能后，这里会显示项目结构。</div>
-      <div v-else-if="!matchingModules.length" class="map-empty">没有匹配的模块、功能或操作。</div>
-      <div v-else class="structure-grid">
-        <section class="structure-column" aria-label="模块">
-          <header><span class="column-index">01</span><h2>模块</h2><small>{{ matchingModules.length }}</small></header>
-          <div class="column-list">
-            <button v-for="module in matchingModules" :key="module.id" type="button" class="structure-item"
-              :class="{ selected: selectedModule?.id === module.id }" :aria-pressed="selectedModule?.id === module.id"
-              @click="selectedModuleId = module.id; selectedFeatureId = ''">
-              <span class="item-code">{{ module.code }}</span><strong>{{ module.name }}</strong>
-              <small>{{ featuresOf(module.id).length }} 项功能</small>
-            </button>
-          </div>
-        </section>
-        <section class="structure-column" aria-label="功能">
-          <header><span class="column-index">02</span><h2>功能</h2><small>{{ matchingFeatures.length }}</small></header>
-          <div v-if="matchingFeatures.length" class="column-list">
-            <button v-for="feature in matchingFeatures" :key="feature.id" type="button" class="structure-item"
-              :class="{ selected: selectedFeature?.id === feature.id }" :aria-pressed="selectedFeature?.id === feature.id"
-              @click="selectedFeatureId = feature.id">
-              <span class="item-code">{{ feature.code }}</span><strong>{{ feature.name }}</strong>
-              <span class="item-foot"><small>{{ capabilitiesOf(feature.id).length }} 项操作</small><em>{{ featureStatus[feature.status] }}</em></span>
-            </button>
-          </div>
-          <p v-else class="column-empty">该模块尚未记录功能。</p>
-        </section>
-        <section class="structure-column" aria-label="操作">
-          <header><span class="column-index">03</span><h2>操作</h2><small>{{ matchingCapabilities.length }}</small></header>
-          <div v-if="matchingCapabilities.length" class="column-list">
-            <button v-for="capability in matchingCapabilities" :key="capability.id" type="button" class="structure-item capability-item"
-              @click="selectedFeature && emit('openFeature', selectedFeature, capability.id)">
-              <span class="item-code">{{ capability.code }}</span><strong>{{ capability.name }}</strong>
-              <span class="item-foot"><small>{{ capability.summary || '暂无说明' }}</small><em>{{ capabilityStatus[capability.status] }}</em></span>
-            </button>
-          </div>
-          <p v-else class="column-empty">{{ selectedFeature ? '该功能尚未记录操作。' : '选择功能后查看操作。' }}</p>
-        </section>
-      </div>
-      <section v-if="selectedFeature" class="selected-feature surface" aria-label="当前功能说明">
-        <div><span class="item-code">{{ selectedModule?.name }} / {{ selectedFeature.code }}</span><h2>{{ selectedFeature.name }}</h2><p>{{ selectedFeature.summary || '尚未填写功能说明。' }}</p></div>
-        <button type="button" @click="emit('openFeature', selectedFeature)">查看功能详情 <span aria-hidden="true">↗</span></button>
-      </section>
-    </template>
-
+    <div v-else-if="parsedMap.state === 'invalid'" class="map-empty invalid" role="alert">
+      <strong>模块图暂不可展示</strong><p>{{ parsedMap.reason }}</p>
+    </div>
     <template v-else>
-      <p class="map-note">图中节点与有方向的连线仅来自架构文档{{ architectureRevision ? ` ${architectureRevision}` : '' }}；“已实现”是文档标注，不代表独立验证。层级按 JSON 中节点首次出现的顺序排列。</p>
-      <div class="map-legend" aria-label="交互关系图例">
-        <span data-status="implemented"><i aria-hidden="true"></i>已实现 · 文档标注</span>
-        <span data-status="planned"><i aria-hidden="true"></i>规划中 · 文档标注</span>
-        <span data-status="unknown"><i aria-hidden="true"></i>关系状态未标注</span>
-      </div>
-      <div v-if="parsedMap.state === 'missing'" class="map-empty">
-        <strong>尚未记录交互拓扑</strong>
-        <p>请在架构设计正文中添加一个 <code>forgeflow-map</code> JSON 代码块，明确节点、层级和连线。此处不会凭功能名称推断技术关系。</p>
-      </div>
-      <div v-else-if="parsedMap.state === 'invalid'" class="map-empty invalid" role="alert">
-        <strong>架构图暂不可展示</strong><p>{{ parsedMap.reason }}</p>
-      </div>
-      <div v-else-if="!layers.length" class="map-empty">没有匹配的架构节点。</div>
-      <div v-else class="architecture-layout">
-        <div class="layer-stack" aria-label="架构分层">
-          <section v-for="(layer, index) in layers" :key="layer.name" class="map-layer" :aria-label="`${layer.name}层`">
-            <header class="layer-heading"><span>{{ String(index + 1).padStart(2, '0') }}</span><h2>{{ layer.name }}</h2><small>{{ layer.nodes.length }} 个节点</small></header>
-            <div class="layer-nodes">
-              <article v-for="node in layer.nodes" :key="node.id" class="map-node" :class="{ active: selectedNode?.id === node.id }">
-                <button class="node-select" type="button" :aria-pressed="selectedNode?.id === node.id" @click="selectedNodeId = node.id">
-                  <span class="node-top"><small>{{ node.id }}</small><em :data-status="node.status">{{ mapStatus[node.status] }}</em></span>
-                  <strong>{{ node.label }}</strong><span class="node-summary">{{ node.summary }}</span>
-                </button>
-                <div v-if="outgoing(node.id).length" class="node-edges" :aria-label="`${node.label}的对外连接`">
-                  <button v-for="(edge, edgeIndex) in outgoing(node.id)" :key="`${edge.to}-${edgeIndex}`" type="button"
-                    :data-status="edge.status ?? 'unknown'" @click="selectNode(edge.to)">
-                    <span aria-hidden="true">→</span><span><b>{{ edge.label }}</b> · {{ nodeName(edge.to) }}</span>
-                    <em>{{ edge.status ? mapStatus[edge.status] : '关系状态未标注' }}</em>
-                  </button>
-                </div>
-              </article>
-            </div>
-          </section>
+      <div class="map-context">
+        <p>依据：最新架构修订{{ architectureRevision ? ' ' + architectureRevision : '' }}。节点和连线的“已有代码”仅是文档标注，不能代替运行验证。</p>
+        <div class="map-legend" aria-label="模块图图例">
+          <span><i class="legend-line" aria-hidden="true"></i>文档标注已连接</span>
+          <span><i class="legend-line planned" aria-hidden="true"></i>规划连线</span>
+          <span><i class="legend-line unknown" aria-hidden="true"></i>未标注状态</span>
         </div>
-        <aside v-if="selectedNode" class="node-detail surface" aria-label="节点详情">
-          <span class="detail-kicker">SELECTED NODE / {{ selectedNode.layer }}</span>
-          <h2>{{ selectedNode.label }}</h2><p>{{ selectedNode.summary }}</p>
-          <span class="detail-status" :data-status="selectedNode.status">{{ mapStatus[selectedNode.status] }}</span>
-          <div class="detail-section"><h3>技术与学习线索</h3>
-            <div v-if="selectedNode.technology?.length" class="technology-tags"><span v-for="item in selectedNode.technology" :key="item">{{ item }}</span></div>
-            <p v-else>文档未标注具体技术。</p>
+      </div>
+      <div v-if="!layers.length" class="map-empty">没有匹配的模块。</div>
+      <div v-else class="diagram-layout">
+        <section class="diagram-panel" aria-label="项目分层模块图">
+          <div class="diagram-meta">
+            <span>{{ map?.nodes.length }} 个模块 <span aria-hidden="true">·</span> {{ map?.edges.length }} 条明确关系</span>
+            <button v-if="selectedNode" type="button" @click="selectedNodeId = ''">取消聚焦</button>
           </div>
-          <div class="detail-section"><h3>来源</h3><p>{{ selectedNode.source || '文档未标注来源。' }}</p></div>
-          <div class="detail-section"><h3>交互方向</h3>
-            <ul v-if="incoming.length || outgoing(selectedNode.id).length" class="relation-list">
-              <li v-for="(edge, index) in incoming" :key="`in-${index}`"><button type="button" @click="selectNode(edge.from)">{{ nodeName(edge.from) }}</button><span>→ {{ edge.label }} →</span><strong>{{ selectedNode.label }}</strong><small>{{ edge.status ? mapStatus[edge.status] : '关系状态未标注' }}</small></li>
-              <li v-for="(edge, index) in outgoing(selectedNode.id)" :key="`out-${index}`"><strong>{{ selectedNode.label }}</strong><span>→ {{ edge.label }} →</span><button type="button" @click="selectNode(edge.to)">{{ nodeName(edge.to) }}</button><small>{{ edge.status ? mapStatus[edge.status] : '关系状态未标注' }}</small></li>
-            </ul>
-            <p v-else>文档未记录该节点的连线。</p>
+          <div ref="diagram" class="module-diagram">
+            <svg v-if="drawnEdges.length" class="diagram-lines" :viewBox="'0 0 ' + diagramSize.width + ' ' + diagramSize.height" preserveAspectRatio="none" aria-hidden="true">
+              <defs>
+                <marker id="map-arrow-implemented" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L7 4 L1 7" fill="none" stroke="#3d8291" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+                <marker id="map-arrow-planned" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L7 4 L1 7" fill="none" stroke="#b88336" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+                <marker id="map-arrow-unknown" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L7 4 L1 7" fill="none" stroke="#8b9aad" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+              </defs>
+              <path v-for="edge in drawnEdges" :key="edge.key" :d="edge.d" :data-status="edge.status"
+                :class="{ focused: selectedNode && (selectedNode.id === edge.from || selectedNode.id === edge.to), muted: selectedNode && selectedNode.id !== edge.from && selectedNode.id !== edge.to }"
+                :marker-end="'url(#map-arrow-' + edge.status + ')'" />
+            </svg>
+            <section v-for="(layer, index) in layers" :key="layer.name" class="map-band" :style="layerStyle(index)" :aria-label="layer.name + '层'">
+              <header class="band-heading"><span>{{ String(index + 1).padStart(2, '0') }}</span><h2>{{ layer.name }}</h2><small>{{ layer.nodes.length }} 个模块</small></header>
+              <div class="band-nodes">
+                <button v-for="node in layer.nodes" :key="node.id" type="button" class="module-card"
+                  :data-map-node="node.id" :data-status="node.status" :aria-pressed="selectedNode?.id === node.id"
+                  :class="{ selected: selectedNode?.id === node.id, related: selectedNode && relatedIds.has(node.id), subdued: selectedNode && selectedNode.id !== node.id && !relatedIds.has(node.id) }"
+                  @click="selectNode(node.id)">
+                  <span class="card-top"><i aria-hidden="true"></i><small>{{ cardStatusText[node.status] }}</small></span>
+                  <strong>{{ node.label }}</strong>
+                  <span v-if="node.technology?.length" class="card-technology">{{ node.technology.slice(0, 2).join(' · ') }}</span>
+                </button>
+              </div>
+            </section>
           </div>
+          <p v-if="query" class="diagram-filter-note">搜索时仅绘制两端都在结果中的关系。清空搜索可查看完整图。</p>
+        </section>
+
+        <aside ref="inspector" class="module-inspector" aria-label="模块详情">
+          <template v-if="selectedNode">
+            <button class="back-to-diagram" type="button" @click="diagram?.scrollIntoView({ behavior: 'smooth', block: 'start' })">↑ 返回模块图</button>
+            <div class="inspector-head"><span>MODULE / {{ selectedNode.layer }}</span><h2>{{ selectedNode.label }}</h2><small :data-status="selectedNode.status">{{ statusText[selectedNode.status] }}</small></div>
+            <p class="inspector-summary">{{ selectedNode.summary }}</p>
+            <div class="inspector-section"><h3>技术线索</h3>
+              <div v-if="selectedNode.technology?.length" class="technology-tags"><span v-for="item in selectedNode.technology" :key="item">{{ item }}</span></div>
+              <p v-else>架构修订未标注。</p>
+            </div>
+            <div class="inspector-section"><h3>来源位置</h3><p class="source-path">{{ selectedNode.source || '架构修订未标注。' }}</p></div>
+            <div class="inspector-section"><h3>明确关系 <small>{{ selectedIncoming.length + selectedOutgoing.length }}</small></h3>
+              <div v-if="selectedIncoming.length || selectedOutgoing.length" class="relation-list">
+                <div v-for="(edge, index) in selectedIncoming" :key="'in-' + index" class="relation-item" :data-status="edge.status ?? 'unknown'">
+                  <span class="relation-direction">流入</span><button type="button" @click="navigateToNode(edge.from)">{{ nodeName(edge.from) }}</button>
+                  <span class="relation-arrow" aria-hidden="true">→</span><strong>{{ selectedNode.label }}</strong>
+                  <small>{{ edge.label }} · {{ edgeStatusText(edge) }}</small>
+                </div>
+                <div v-for="(edge, index) in selectedOutgoing" :key="'out-' + index" class="relation-item" :data-status="edge.status ?? 'unknown'">
+                  <span class="relation-direction">流出</span><strong>{{ selectedNode.label }}</strong>
+                  <span class="relation-arrow" aria-hidden="true">→</span><button type="button" @click="navigateToNode(edge.to)">{{ nodeName(edge.to) }}</button>
+                  <small>{{ edge.label }} · {{ edgeStatusText(edge) }}</small>
+                </div>
+              </div>
+              <p v-else>架构修订未声明该模块的连线。</p>
+            </div>
+          </template>
+          <template v-else>
+            <span class="inspector-placeholder-mark" aria-hidden="true">↗</span>
+            <h2>选择一个模块</h2>
+            <p>点击图中的模块，查看它的职责、技术线索、来源位置和明确声明的输入输出关系。</p>
+            <div class="inspector-boundary"><strong>图谱边界</strong><span>登记的功能项不会自动变成架构模块；未声明的交互也不会画成连线。</span></div>
+          </template>
         </aside>
       </div>
     </template>
@@ -217,109 +256,96 @@ watch(() => props.detail.project.id, () => {
 
 <style scoped>
 .project-map-page { min-width: 0; color: var(--ink); container: project-map / inline-size; }
-.map-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding: 6px 0 22px; }
-.map-eyebrow, .detail-kicker { color: var(--primary); font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .12em; }
-.map-heading h1 { margin: 4px 0 3px; font-size: 25px; line-height: 1.2; letter-spacing: -.04em; }
-.map-heading p { margin: 0; color: var(--muted); font-size: 13px; }
-.map-counts { display: flex; gap: 18px; flex-shrink: 0; color: var(--muted); font-size: 12px; white-space: nowrap; }
-.map-counts span { display: flex; align-items: baseline; gap: 5px; }
-.map-counts strong { color: var(--ink); font-family: var(--mono); font-size: 18px; font-weight: 650; }
-.map-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 12px; }
-.map-tabs { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-subtle); }
-.map-tabs button { padding: 6px 13px; border-radius: 6px; color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
-.map-tabs button[aria-pressed="true"] { background: var(--surface); color: var(--primary); box-shadow: var(--shadow-xs); }
-.map-search { display: flex; align-items: center; gap: 7px; width: min(300px, 100%); min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); }
+.map-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding: 3px 0 18px; }
+.heading-copy { min-width: 0; }
+.map-eyebrow, .inspector-head > span { color: var(--primary); font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.map-heading h1 { margin: 4px 0 5px; font-size: 26px; line-height: 1.18; letter-spacing: -.045em; }
+.map-heading p { margin: 0; color: var(--muted); font-size: 12px; }
+.map-search { display: flex; align-items: center; gap: 8px; width: min(280px, 100%); flex: none; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); }
 .map-search:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-subtle); }
 .map-search svg { width: 17px; height: 17px; flex: none; }
 .map-search input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: none; font-size: 12px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-.map-note { margin: 0 0 16px; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
-.map-legend { display: flex; flex-wrap: wrap; gap: 7px 17px; margin: -5px 0 15px; color: var(--muted); font-size: 10.5px; }
-.map-legend span { display: inline-flex; align-items: center; gap: 6px; }
-.map-legend i { display: inline-block; width: 18px; border-top: 2px solid var(--success); }
-.map-legend [data-status="planned"] i { border-color: var(--warning); border-top-style: dashed; }
-.map-legend [data-status="unknown"] i { border-color: var(--line-strong); border-top-style: dotted; }
-.map-empty { padding: 34px; border: 1px dashed var(--line-strong); border-radius: 10px; background: var(--surface); color: var(--muted); font-size: 13px; }
+.map-context { display: flex; align-items: start; justify-content: space-between; gap: 16px; margin-bottom: 11px; }
+.map-context p { max-width: 630px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.map-legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 14px; flex: none; color: var(--muted); font-size: 10px; }
+.map-legend > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.legend-line { display: inline-block; width: 18px; border-top: 2px solid #3d8291; }
+.legend-line.planned { border-color: #b88336; border-top-style: dashed; }
+.legend-line.unknown { border-color: #8b9aad; border-top-style: dotted; }
+.map-empty { padding: 38px; border: 1px dashed var(--line-strong); border-radius: 11px; background: var(--surface); color: var(--muted); font-size: 13px; }
 .map-empty strong { display: block; color: var(--ink); font-size: 15px; }
 .map-empty p { margin: 7px 0 0; }
 .map-empty.invalid { border-color: var(--warning-border); background: var(--warning-bg); }
-.structure-grid { display: grid; grid-template-columns: minmax(0,.75fr) minmax(0,1.05fr) minmax(0,1.2fr); gap: 12px; min-width: 0; }
-.structure-column { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-xs); }
-.structure-column > header { display: flex; align-items: center; gap: 8px; padding: 13px 15px; border-bottom: 1px solid var(--line); background: var(--surface-subtle); }
-.column-index { color: var(--primary); font-family: var(--mono); font-size: 11px; font-weight: 700; }
-.structure-column h2 { margin: 0; font-size: 13px; }
-.structure-column header small { margin-left: auto; color: var(--muted); font-family: var(--mono); }
-.column-list { display: flex; flex-direction: column; gap: 5px; max-height: 55vh; overflow-y: auto; padding: 7px; }
-.structure-item { display: flex; flex-direction: column; align-items: start; gap: 4px; width: 100%; min-width: 0; padding: 10px 11px; border: 1px solid transparent; border-radius: 7px; text-align: left; }
-.structure-item:hover, .structure-item:focus-visible { background: var(--surface-hover); border-color: var(--line); }
-.structure-item.selected { background: var(--primary-subtle); border-color: var(--primary-border); }
-.item-code { color: var(--primary); font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .02em; overflow-wrap: anywhere; }
-.structure-item strong { max-width: 100%; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
-.structure-item small, .item-foot small { color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
-.item-foot { display: flex; align-items: start; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; }
-.item-foot em { flex: none; color: var(--muted); font-size: 10.5px; font-style: normal; white-space: nowrap; }
-.capability-item { border-bottom: 1px solid var(--line-subtle); }
-.column-empty { margin: 0; padding: 18px; color: var(--muted); font-size: 12px; }
-.selected-feature { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 12px; padding: 18px 20px; border: 1px solid var(--line); border-radius: 10px; }
-.selected-feature h2 { margin: 3px 0; font-size: 16px; }
-.selected-feature p { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.selected-feature button { flex: none; padding: 8px 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--primary); font-size: 12px; font-weight: 600; }
-.selected-feature button:hover { background: var(--primary-subtle); }
-.architecture-layout { display: grid; grid-template-columns: minmax(0,1.65fr) minmax(260px,.85fr); align-items: start; gap: 15px; min-width: 0; }
-.layer-stack { display: flex; flex-direction: column; gap: 13px; min-width: 0; }
-.map-layer { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
-.layer-heading { display: flex; align-items: baseline; gap: 9px; margin-bottom: 13px; }
-.layer-heading > span { color: var(--primary); font-family: var(--mono); font-size: 11px; font-weight: 700; }
-.layer-heading h2 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
-.layer-heading small { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
-.layer-nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 10px; }
-.map-node { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
-.map-node.active { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-subtle); }
-.node-select { display: flex; flex-direction: column; align-items: start; gap: 6px; width: 100%; min-width: 0; padding: 12px; text-align: left; }
-.node-select:hover { background: var(--surface-hover); }
-.node-top { display: flex; justify-content: space-between; align-items: start; gap: 7px; width: 100%; }
-.node-top small { color: var(--primary); font-family: var(--mono); font-size: 10px; overflow-wrap: anywhere; }
-.node-top em, .detail-status { padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font-size: 10px; font-style: normal; white-space: nowrap; }
-.node-top em[data-status="implemented"], .detail-status[data-status="implemented"] { border-color: var(--success-border); background: var(--success-bg); color: var(--success-ink); }
-.node-top em[data-status="planned"], .detail-status[data-status="planned"] { border-color: var(--warning-border); background: var(--warning-bg); color: var(--warning-ink); }
-.node-select strong { font-size: 13px; overflow-wrap: anywhere; }
-.node-summary { color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-.node-edges { display: flex; flex-direction: column; gap: 3px; padding: 7px 10px 9px; border-top: 1px solid var(--line-subtle); }
-.node-edges button { display: grid; grid-template-columns: 12px minmax(0,1fr); gap: 1px 6px; width: 100%; padding: 4px 4px 4px 7px; border-left: 2px solid var(--success); text-align: left; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
-.node-edges button[data-status="planned"] { border-color: var(--warning); border-left-style: dashed; }
-.node-edges button[data-status="unknown"] { border-color: var(--line-strong); border-left-style: dotted; }
-.node-edges button:hover { color: var(--primary); }
-.node-edges button > span:first-child { color: var(--primary); font-weight: 700; }
-.node-edges b { color: var(--ink-secondary); font-weight: 600; }
-.node-edges em { grid-column: 2; color: var(--muted-light); font-size: 10px; font-style: normal; }
-.node-detail { position: sticky; top: 12px; min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 10px; }
-.node-detail h2 { margin: 6px 0; font-size: 20px; overflow-wrap: anywhere; }
-.node-detail > p, .detail-section > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
-.detail-status { display: inline-block; margin-top: 12px; }
-.detail-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line-subtle); }
-.detail-section h3 { margin: 0 0 9px; color: var(--ink-secondary); font-size: 12px; }
-.technology-tags { display: flex; flex-wrap: wrap; gap: 6px; }
-.technology-tags span { padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-subtle); color: var(--ink-secondary); font-size: 11px; overflow-wrap: anywhere; }
-.relation-list { display: flex; flex-direction: column; gap: 9px; margin: 0; padding: 0; list-style: none; }
-.relation-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
-.relation-list button { padding: 0; color: var(--primary); text-align: left; text-decoration: underline; text-underline-offset: 2px; }
-.relation-list strong { color: var(--ink-secondary); }
-.relation-list small { flex-basis: 100%; color: var(--muted-light); font-size: 10px; }
-@container project-map (max-width: 850px) {
-  .architecture-layout { grid-template-columns: minmax(0,1fr); }
-  .node-detail { position: static; }
+.diagram-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(235px, 280px); align-items: start; gap: 14px; min-width: 0; }
+.diagram-panel { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); box-shadow: var(--shadow-xs); }
+.diagram-meta { display: flex; align-items: center; justify-content: space-between; min-height: 36px; padding: 7px 17px; border-bottom: 1px solid var(--line-subtle); color: var(--muted); font-family: var(--mono); font-size: 10px; }
+.diagram-meta button { padding: 2px 4px; color: var(--primary); font-family: inherit; font-size: 10px; font-weight: 600; }
+.diagram-meta button:hover { text-decoration: underline; }
+.module-diagram { position: relative; display: flex; flex-direction: column; gap: 28px; min-width: 0; padding: 22px 22px 26px; background-color: #fbfcfe; background-image: radial-gradient(#e6ebf2 0.7px, transparent 0.7px); background-size: 18px 18px; }
+.diagram-lines { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.diagram-lines > path { fill: none; stroke: #3d8291; stroke-width: 1.75; opacity: .52; vector-effect: non-scaling-stroke; transition: opacity .2s ease, stroke-width .2s ease; }
+.diagram-lines path[data-status="planned"] { stroke: #b88336; stroke-dasharray: 5 5; opacity: .62; }
+.diagram-lines path[data-status="unknown"] { stroke: #8b9aad; stroke-dasharray: 2 5; }
+.diagram-lines path.focused { opacity: 1; stroke-width: 2.5; }
+.diagram-lines path.muted { opacity: .13; }
+.map-band { position: relative; min-width: 0; padding: 12px 13px 13px; border: 1px solid var(--band-border); border-left: 4px solid var(--band-accent); border-radius: 8px; background: var(--band-tint); }
+.band-heading { position: relative; z-index: 3; display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.band-heading > span { color: var(--band-accent); font-family: var(--mono); font-size: 10px; font-weight: 700; }
+.band-heading h2 { margin: 0; color: var(--ink-secondary); font-size: 12px; font-weight: 700; }
+.band-heading small { margin-left: auto; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.band-nodes { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.module-card { position: relative; z-index: 3; display: flex; flex: 0 1 238px; flex-direction: column; align-items: start; gap: 6px; width: min(100%, 238px); min-width: 0; min-height: 82px; padding: 10px 11px; border: 1px solid var(--band-accent); border-radius: 7px; background: var(--surface); box-shadow: 0 1px 2px rgba(15, 23, 42, .04); text-align: left; transition: transform .15s ease, opacity .15s ease, box-shadow .15s ease; }
+.module-card:hover, .module-card:focus-visible { transform: translateY(-2px); box-shadow: var(--shadow-sm); outline: 0; }
+.module-card:focus-visible { box-shadow: 0 0 0 3px var(--primary-border); }
+.module-card.selected { box-shadow: 0 0 0 3px var(--band-border), var(--shadow-sm); }
+.module-card.subdued { opacity: .52; }
+.module-card.related { box-shadow: 0 0 0 2px var(--band-border); }
+.card-top { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+.card-top i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #3d8291; }
+.module-card[data-status="planned"] .card-top i { background: #b88336; }
+.card-top small { font-size: 10px; }
+.module-card strong { max-width: 100%; color: var(--ink); font-size: 12px; line-height: 1.3; overflow-wrap: anywhere; }
+.card-technology { max-width: 100%; color: var(--muted); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
+.diagram-filter-note { margin: 0; padding: 8px 17px; border-top: 1px solid var(--line-subtle); color: var(--muted); font-size: 10px; }
+.module-inspector { position: sticky; top: 10px; min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); box-shadow: var(--shadow-xs); }
+.back-to-diagram { display: none; padding: 0 0 10px; color: var(--primary); font-size: 11px; font-weight: 600; }
+.inspector-head h2 { margin: 6px 0 9px; font-size: 18px; line-height: 1.28; overflow-wrap: anywhere; }
+.inspector-head > small { display: inline-block; padding: 2px 6px; border: 1px solid var(--success-border); border-radius: 4px; background: var(--success-bg); color: var(--success-ink); font-size: 10px; }
+.inspector-head > small[data-status="planned"] { border-color: var(--warning-border); background: var(--warning-bg); color: var(--warning-ink); }
+.inspector-summary { margin: 14px 0 0; color: var(--ink-secondary); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.inspector-section { margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--line-subtle); }
+.inspector-section h3 { display: flex; justify-content: space-between; gap: 8px; margin: 0 0 8px; font-size: 11px; }
+.inspector-section h3 small { color: var(--muted); font-family: var(--mono); font-weight: 400; }
+.inspector-section p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.source-path { font-family: var(--mono); }
+.technology-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.technology-tags span { padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-subtle); color: var(--ink-secondary); font-size: 10px; overflow-wrap: anywhere; }
+.relation-list { display: flex; flex-direction: column; gap: 7px; }
+.relation-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 4px; padding: 8px 9px; border-left: 2px solid #3d8291; border-radius: 0 5px 5px 0; background: var(--surface-subtle); color: var(--ink-secondary); font-size: 10px; line-height: 1.45; }
+.relation-item[data-status="planned"] { border-left-color: #b88336; }
+.relation-item[data-status="unknown"] { border-left-color: var(--line-strong); }
+.relation-direction { width: 100%; color: var(--muted); font-size: 9px; }
+.relation-item button { padding: 0; color: var(--primary); font-size: inherit; font-weight: 600; text-align: left; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.relation-item strong { font-size: inherit; font-weight: 650; overflow-wrap: anywhere; }
+.relation-arrow { color: var(--muted); }
+.relation-item small { width: 100%; color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+.inspector-placeholder-mark { display: grid; place-items: center; width: 35px; height: 35px; border: 1px solid var(--primary-border); border-radius: 8px; background: var(--primary-subtle); color: var(--primary); font-size: 20px; }
+.module-inspector > h2 { margin: 14px 0 6px; font-size: 16px; }
+.module-inspector > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.inspector-boundary { display: flex; flex-direction: column; gap: 5px; margin-top: 22px; padding-top: 13px; border-top: 1px solid var(--line-subtle); color: var(--muted); font-size: 10px; line-height: 1.55; }
+.inspector-boundary strong { color: var(--ink-secondary); font-size: 11px; }
+@container project-map (max-width: 870px) {
+  .diagram-layout { grid-template-columns: minmax(0, 1fr); }
+  .module-inspector { position: static; scroll-margin-top: 12px; }
+  .back-to-diagram { display: inline-block; }
 }
-@container project-map (max-width: 710px) {
-  .structure-grid { grid-template-columns: minmax(0,1fr); }
-  .column-list { max-height: 220px; }
-  .map-heading { align-items: start; flex-direction: column; gap: 12px; }
-  .map-toolbar { align-items: stretch; flex-direction: column; }
+@container project-map (max-width: 600px) {
+  .map-heading { align-items: start; flex-direction: column; gap: 13px; }
   .map-search { width: 100%; }
-  .selected-feature { align-items: start; flex-direction: column; }
-}
-@container project-map (max-width: 410px) {
-  .map-counts { width: 100%; justify-content: space-between; }
-  .map-tabs { width: 100%; }
-  .map-tabs button { flex: 1; padding-inline: 5px; }
+  .map-context { flex-direction: column; gap: 8px; }
+  .map-legend { justify-content: flex-start; }
+  .module-diagram { gap: 24px; padding: 15px 11px 19px; }
+  .module-card { flex: 1 1 100%; width: 100%; }
 }
 </style>

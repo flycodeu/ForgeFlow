@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { parseProjectMap } from './project-map.ts';
+import { orderProjectMapLayers, parseProjectMap } from './project-map.ts';
 
 const node = (id) => ({ id, label: id, layer: '界面', summary: `${id} 的职责`, status: 'implemented' });
 const document = (map) => `# 架构\n\n\`\`\`forgeflow-map\n${JSON.stringify(map)}\n\`\`\`\n`;
@@ -40,5 +40,29 @@ test('project baselines expose explicit, valid topology', async () => {
     if (result.state !== 'ready') continue;
     assert.ok(result.map.nodes.length >= 8);
     assert.ok(result.map.edges.every((edge) => edge.status === 'implemented' || edge.status === 'planned'));
+    assert.deepEqual(
+      [result.map.nodes.length, result.map.edges.length],
+      project === 'streamfusion' ? [8, 8] : [10, 10],
+    );
   }
+});
+
+test('layer order follows implemented paths while preserving explicit planned directions', async () => {
+  const streamfusion = parseProjectMap(await readFile(resolve(import.meta.dirname, '../../../../docs/project-atlas/streamfusion-architecture.md'), 'utf8'));
+  assert.equal(streamfusion.state, 'ready');
+  if (streamfusion.state !== 'ready') return;
+  const layers = orderProjectMapLayers(streamfusion.map);
+  assert.ok(layers.indexOf('交互界面') < layers.indexOf('业务服务'));
+  assert.ok(layers.indexOf('业务服务') < layers.indexOf('数据依赖'));
+  assert.deepEqual(streamfusion.map.edges.filter((edge) => edge.from === 'sf-agent' && edge.to === 'sf-runtime').map((edge) => edge.status), ['planned']);
+  assert.deepEqual(streamfusion.map.edges.filter((edge) => edge.from === 'sf-runtime' && edge.to === 'sf-agent').map((edge) => edge.status), ['planned']);
+
+  const salary = parseProjectMap(await readFile(resolve(import.meta.dirname, '../../../../docs/project-atlas/salary-architecture.md'), 'utf8'));
+  assert.equal(salary.state, 'ready');
+  if (salary.state !== 'ready') return;
+  const salaryLayers = orderProjectMapLayers(salary.map);
+  assert.ok(salaryLayers.indexOf('外部来源') < salaryLayers.indexOf('Windows 本机能力'));
+  assert.ok(salaryLayers.indexOf('外部来源') < salaryLayers.indexOf('Android 本机能力'));
+  assert.ok(salaryLayers.indexOf('Windows 本机能力') < salaryLayers.indexOf('本机数据'));
+  assert.ok(salaryLayers.indexOf('Android 本机能力') < salaryLayers.indexOf('本机数据'));
 });

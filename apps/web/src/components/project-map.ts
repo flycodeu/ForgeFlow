@@ -23,6 +23,36 @@ export type ProjectMapParseResult =
   | { state: 'invalid'; reason: string }
   | { state: 'ready'; map: ProjectMap };
 
+/** Use declared, connected code paths as the main reading axis. Planned edges keep their own arrows. */
+export function orderProjectMapLayers(map: ProjectMap): string[] {
+  const layers = [...new Set(map.nodes.map((node) => node.layer))];
+  const layerById = new Map(map.nodes.map((node) => [node.id, node.layer]));
+  const after = new Map(layers.map((layer) => [layer, new Set<string>()]));
+  const indegree = new Map(layers.map((layer) => [layer, 0]));
+  for (const edge of map.edges) {
+    if (edge.status !== 'implemented') continue;
+    const from = layerById.get(edge.from);
+    const to = layerById.get(edge.to);
+    if (!from || !to || from === to || after.get(from)?.has(to)) continue;
+    after.get(from)?.add(to);
+    indegree.set(to, (indegree.get(to) ?? 0) + 1);
+  }
+  const remaining = new Set(layers);
+  const ordered: string[] = [];
+  while (remaining.size) {
+    const next = layers.find((layer) => remaining.has(layer) && indegree.get(layer) === 0);
+    if (!next) {
+      // Cyclic layer relationships cannot have a top-to-bottom order.
+      ordered.push(...layers.filter((layer) => remaining.has(layer)));
+      break;
+    }
+    ordered.push(next);
+    remaining.delete(next);
+    for (const target of after.get(next) ?? []) indegree.set(target, (indegree.get(target) ?? 0) - 1);
+  }
+  return ordered;
+}
+
 const fence = /^[ \t]*```forgeflow-map[ \t]*\r?\n([\s\S]*?)^[ \t]*```[ \t]*$/gm;
 const idPattern = /^[\p{L}\p{N}][\p{L}\p{N}._:-]*$/u;
 const record = (value: unknown): value is Record<string, unknown> =>

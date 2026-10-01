@@ -19,6 +19,7 @@ import ArchiveRestore from './components/ArchiveRestore.vue';
 import Icon from './components/Icon.vue';
 import { api, ApiRequestError } from './api-client';
 import { latestRun as latestExecution, runVerificationLabel, runVerificationTone, taskImplementationLabel } from './evidence-status';
+import { renderMarkdown } from './markdown-renderer';
 import './app.css';
 
 type WorkspacePage = 'projects' | 'overview' | 'map' | 'materials' | 'background' | 'research' | 'requirements' | 'architecture' | 'technology'
@@ -555,51 +556,10 @@ function sourceName(source: string) {
   if (source.startsWith('local:')) return `本机资料 · ${source.slice(6).split('@sha256:')[0]?.split('/').at(-1) ?? '本地文件'}`;
   return source;
 }
-function escapeHtml(value: string) {
-  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
-}
-function inlineMarkdown(value: string) {
-  return escapeHtml(value).replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
-}
 function documentReadingContent(markdown: string) {
   if (workspacePage.value !== 'architecture') return markdown;
   return markdown.replace(/^[ \t]*```forgeflow-map[ \t]*\r?\n[\s\S]*?^[ \t]*```[ \t]*$/gm,
     '> 本版交互图已收录在「项目全景图」。编辑版本时可查看完整图谱数据。');
-}
-function renderMarkdown(markdown: string) {
-  const output: string[] = []; let paragraph: string[] = []; let listType: 'ul' | 'ol' | null = null;
-  let inCode = false; let code: string[] = []; let headingIndex = 0;
-  const flush = () => { if (paragraph.length) output.push(`<p>${inlineMarkdown(paragraph.join(' '))}</p>`); paragraph = []; };
-  const closeList = () => { if (listType) output.push(`</${listType}>`); listType = null; };
-  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]!;
-    if (line.startsWith('```')) { flush(); closeList(); if (inCode) { output.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`); code = []; } inCode = !inCode; continue; }
-    if (inCode) { code.push(line); continue; }
-    const h = /^(#{1,4})\s+(.+)$/.exec(line); const ul = /^[-*]\s+(.+)$/.exec(line); const ol = /^\d+\.\s+(.+)$/.exec(line); const quote = /^>\s?(.+)$/.exec(line);
-    if (h) { flush(); closeList(); headingIndex += 1; output.push(`<h${h[1].length} id="design-section-${headingIndex}">${inlineMarkdown(h[2])}</h${h[1].length}>`); continue; }
-    if (line.includes('|') && index + 1 < lines.length && /^\s*\|?[\s:|-]+\|/.test(lines[index + 1] ?? '')) {
-      flush(); closeList();
-      const headers = line.split('|').map((item) => item.trim()).filter(Boolean);
-      const rows: string[][] = [];
-      index += 2;
-      while (index < lines.length && lines[index]!.includes('|')) {
-        rows.push(lines[index]!.split('|').map((item) => item.trim()).filter(Boolean)); index += 1;
-      }
-      index -= 1;
-      output.push(`<div class="markdown-table-wrap"><table><thead><tr>${headers.map((item) => `<th>${inlineMarkdown(item)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((_, cell) => `<td>${inlineMarkdown(row[cell] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
-      continue;
-    }
-    if (ul || ol) { flush(); const next = ul ? 'ul' : 'ol'; if (listType !== next) { closeList(); listType = next; output.push(`<${next}>`); } output.push(`<li>${inlineMarkdown((ul ?? ol)![1])}</li>`); continue; }
-    if (quote) { flush(); closeList(); output.push(`<blockquote>${inlineMarkdown(quote[1])}</blockquote>`); continue; }
-    if (/^---+$/.test(line.trim())) { flush(); closeList(); output.push('<hr>'); continue; }
-    if (!line.trim()) { flush(); closeList(); continue; }
-    paragraph.push(line.trim());
-  }
-  if (inCode) output.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
-  flush(); closeList(); return output.join('');
 }
 
 const revisionDiff = computed(() => {
@@ -1521,7 +1481,7 @@ onUnmounted(() => {
             <template v-else>
               <section v-if="currentRevision && currentProject.workflowMode === 'CONTROLLED'" class="baseline-bar" :class="{ warning: currentSpecification.latestRevisionId !== currentSpecification.approvedRevisionId }"><div class="baseline-facts"><span><small>当前正式版本</small><strong>{{ approvedRevision ? `REV ${approvedRevision.revisionNo}` : '尚未批准' }}</strong></span><span><small>最新版本</small><strong>REV {{ currentRevision.revisionNo }}</strong></span><span><small>状态</small><strong>{{ currentSpecification.latestRevisionId === currentSpecification.approvedRevisionId ? '已批准' : reviewStatusName(currentRevisionReview?.status ?? null) }}</strong></span></div><div class="baseline-actions"><button v-if="currentSpecification.latestRevisionId !== currentSpecification.approvedRevisionId" class="secondary-button" type="button" @click="showRevisionDiff">查看变更</button><button v-if="!currentRevisionReview" class="primary-button" type="button" :disabled="busy" @click="submitDesignReview">提交评审</button><template v-if="currentRevisionReview?.status === 'PENDING'"><button class="primary-button" type="button" :disabled="busy" @click="approveDesignReview(currentRevisionReview)">批准</button><button class="secondary-button" type="button" :disabled="busy" @click="requestDesignChanges">要求修改</button></template></div></section>
               <section v-if="reviewDiffVisible && currentRevision" class="surface revision-diff"><div class="surface-heading"><div><span class="section-index">DIFF</span><h2>REV {{ currentRevision.revisionNo }} 变更</h2></div><span class="surface-note">对比 {{ diffBaseRevision ? `REV ${diffBaseRevision.revisionNo}` : '空内容' }}</span></div><div class="diff-legend"><span class="added">新增</span><span class="removed">删除</span><span>未变化</span></div><pre><span v-for="(line, index) in revisionDiff" :key="index" :class="`diff-line ${line.kind}`"><i>{{ line.oldLine ?? '' }}</i><i>{{ line.newLine ?? '' }}</i><b>{{ line.kind === 'added' ? '+' : line.kind === 'removed' ? '−' : ' ' }}</b><code>{{ line.text || ' ' }}</code></span></pre></section>
-              <div v-else-if="documentMode === 'read'" class="document-workbench"><article class="surface document-reader"><div class="document-statusbar"><div><span class="status-tag planning">{{ selectedRevision?.id === approvedRevision?.id ? '正式基线' : '工作草稿' }}</span><strong>{{ selectedRevision ? `REV ${selectedRevision.revisionNo}` : '尚无版本' }}</strong><span v-if="selectedRevision?.id === currentRevision?.id">当前版本</span><span v-else-if="selectedRevision">历史版本 · 只读</span></div><small v-if="selectedRevision">{{ sourceName(selectedRevision.source) }} · {{ formatTime(selectedRevision.createdAt) }}</small></div><section v-if="workspacePage === 'technology' && technologySummary.length" class="technology-decisions-summary"><div class="technology-summary-head"><span>类别</span><span>选择</span><span>用途与原因</span><span>状态</span></div><div v-for="item in technologySummary" :key="`${item.category}-${item.choice}`" class="technology-decision"><span>{{ item.category }}</span><strong>{{ item.choice }}</strong><p>{{ [item.purpose, item.reason, item.alternatives && `替代：${item.alternatives}`].filter(Boolean).join(' · ') || '详细说明见正文' }}</p><b>{{ item.status || '—' }}</b></div></section><div v-if="selectedRevision" class="markdown-body" v-html="renderMarkdown(documentReadingContent(selectedRevision.content))"></div><div v-else class="empty-state document-empty"><span>R0</span><h3>尚未创建初版</h3><button class="primary-button" type="button" @click="startRevision">创建初版</button></div></article><aside class="surface version-rail"><div class="surface-heading"><div><span class="section-index">REV</span><h2>版本历史</h2></div><span class="count-label">{{ revisions.length }}</span></div><div v-if="revisions.length" class="revision-list"><button v-for="revision in revisions" :key="revision.id" type="button" :class="{ active: selectedRevision?.id === revision.id }" @click="selectHistory(revision.id)"><span class="revision-number">R{{ revision.revisionNo }}</span><span><strong>{{ revision.changeSummary }}</strong><small>{{ formatTime(revision.createdAt) }}</small></span><b>{{ revision.id === currentRevision?.id ? '当前' : '→' }}</b></button></div><div v-else class="empty-state compact"><span>R0</span><h3>暂无版本</h3></div></aside></div>
+              <div v-else-if="documentMode === 'read'" class="document-workbench"><article class="surface document-reader"><div class="document-statusbar"><div><span class="status-tag planning">{{ selectedRevision?.id === approvedRevision?.id ? '正式基线' : '工作草稿' }}</span><strong>{{ selectedRevision ? `REV ${selectedRevision.revisionNo}` : '尚无版本' }}</strong><span v-if="selectedRevision?.id === currentRevision?.id">当前版本</span><span v-else-if="selectedRevision">历史版本 · 只读</span></div><small v-if="selectedRevision">{{ sourceName(selectedRevision.source) }} · {{ formatTime(selectedRevision.createdAt) }}</small></div><section v-if="workspacePage === 'technology' && technologySummary.length" class="technology-decisions-summary"><div class="technology-summary-head"><span>类别</span><span>选择</span><span>用途与原因</span><span>状态</span></div><div v-for="item in technologySummary" :key="`${item.category}-${item.choice}`" class="technology-decision"><span>{{ item.category }}</span><strong>{{ item.choice }}</strong><p>{{ [item.purpose, item.reason, item.alternatives && `替代：${item.alternatives}`].filter(Boolean).join(' · ') || '详细说明见正文' }}</p><b>{{ item.status || '—' }}</b></div></section><div v-if="selectedRevision" class="markdown-body" v-html="renderMarkdown(documentReadingContent(selectedRevision.content), { headingIds: true })"></div><div v-else class="empty-state document-empty"><span>R0</span><h3>尚未创建初版</h3><button class="primary-button" type="button" @click="startRevision">创建初版</button></div></article><aside class="surface version-rail"><div class="surface-heading"><div><span class="section-index">REV</span><h2>版本历史</h2></div><span class="count-label">{{ revisions.length }}</span></div><div v-if="revisions.length" class="revision-list"><button v-for="revision in revisions" :key="revision.id" type="button" :class="{ active: selectedRevision?.id === revision.id }" @click="selectHistory(revision.id)"><span class="revision-number">R{{ revision.revisionNo }}</span><span><strong>{{ revision.changeSummary }}</strong><small>{{ formatTime(revision.createdAt) }}</small></span><b>{{ revision.id === currentRevision?.id ? '当前' : '→' }}</b></button></div><div v-else class="empty-state compact"><span>R0</span><h3>暂无版本</h3></div></aside></div>
               <div v-else class="revision-create-layout">
                 <form class="surface revision-editor" @submit.prevent="createRevision">
                   <div class="surface-heading"><div><h2>创建新版本</h2></div></div>
@@ -1770,7 +1730,7 @@ onUnmounted(() => {
                     </button>
                   </div>
                 </div>
-                <div v-if="!markdownRawMode" class="markdown-body feature-markdown-content" v-html="renderMarkdown(fullFeatureMarkdown)"></div>
+                <div v-if="!markdownRawMode" class="markdown-body feature-markdown-content" v-html="renderMarkdown(fullFeatureMarkdown, { headingIds: true })"></div>
                 <pre v-else class="markdown-raw-code"><code>{{ fullFeatureMarkdown }}</code></pre>
               </div>
             </template>
